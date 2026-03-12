@@ -20,40 +20,47 @@ export default function ReportPage() {
 
     setLoading(true);
 
-    const { data: auth } = await supabase.auth.getUser();
-const userId = auth.user?.id ?? null;
+    // Must be logged in
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    if (authErr) {
+      setLoading(false);
+      setMsg(`Auth error: ${authErr.message}`);
+      return;
+    }
 
-if (!userId) {
-  setLoading(false);
-  setMsg("You must login first to report a complaint.");
-  return;
-}
+    const userId = authData.user?.id;
+    if (!userId) {
+      setLoading(false);
+      setMsg("You must login first to report a complaint.");
+      return;
+    }
 
-// OPTIONAL (recommended): require verified profile
-const { data: profile, error: profErr } = await supabase
-  .from("profiles")
-  .select("is_verified")
-  .eq("id", userId)
-  .single();
+    // Must be OTP verified
+    const { data: profile, error: profErr } = await supabase
+      .from("profiles")
+      .select("is_verified")
+      .eq("id", userId)
+      .single();
 
-if (profErr) {
-  setLoading(false);
-  setMsg(`Profile error: ${profErr.message}`);
-  return;
-}
+    if (profErr) {
+      setLoading(false);
+      setMsg(`Profile error: ${profErr.message}`);
+      return;
+    }
 
-if (!profile?.is_verified) {
-  setLoading(false);
-  setMsg("Please verify your email (OTP) before reporting a complaint.");
-  return;
-}
+    if (!profile?.is_verified) {
+      setLoading(false);
+      setMsg("Please verify your email (OTP) before reporting a complaint.");
+      return;
+    }
 
+    // Insert complaint
     const { error } = await supabase.from("complaints").insert({
-  title: title.trim(),
-  description: description.trim(),
-  created_by: userId,
-  status: "submitted",
-});
+      title: title.trim(),
+      description: description.trim(),
+      created_by: userId,
+      status: "submitted",
+    });
 
     setLoading(false);
 
@@ -79,7 +86,9 @@ if (!profile?.is_verified) {
             padding: 16,
           }}
         >
-          <h1 style={{ margin: 0, fontSize: 22, color: "#111827" }}>Report a complaint</h1>
+          <h1 style={{ margin: 0, fontSize: 22, color: "#111827" }}>
+            Report a complaint
+          </h1>
           <p style={{ margin: "6px 0 16px", color: "#6b7280", fontSize: 14 }}>
             Submit a short title and a detailed description.
           </p>
