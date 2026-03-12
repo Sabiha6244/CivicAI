@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-
+import LogoutButton from "./components/LogoutButton";
 export default async function Home() {
   // Public list (RLS allows anon/auth to read complaints)
   const { data: complaints, error } = await supabase
@@ -37,6 +37,7 @@ export default async function Home() {
               Report a complaint
             </Link>
           </div>
+          <LogoutButton />
         </header>
 
         {/* Content */}
