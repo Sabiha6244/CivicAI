@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Mode = "login" | "register";
@@ -29,6 +29,20 @@ function validateFullName(name: string) {
 }
 
 export default function LoginPage() {
+  // read redirect target from URL (server redirects to /login?next=/report&verify=1)
+  const [nextUrl, setNextUrl] = useState<string>("/");
+  const [verifyRequired, setVerifyRequired] = useState(false);
+
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+
+    const n = p.get("next");
+    if (n && n.startsWith("/")) setNextUrl(n);
+    else setNextUrl("/");
+
+    setVerifyRequired(p.get("verify") === "1");
+  }, []);
+
   const [mode, setMode] = useState<Mode>("login");
 
   // login
@@ -45,15 +59,50 @@ export default function LoginPage() {
   const [regStep, setRegStep] = useState<1 | 2>(1);
   const [otp, setOtp] = useState("");
 
+  // Keep userId so we can send OTP after login if needed
+  const [otpUserId, setOtpUserId] = useState<string | null>(null);
+
   const [msg, setMsg] = useState<string | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (verifyRequired) {
+      setMsg("Email verification required to continue. Please login, then request OTP.");
+    }
+  }, [verifyRequired]);
 
   function clearMessages() {
     setMsg(null);
     setErrors({});
   }
 
+  function goNext() {
+    window.location.href = nextUrl || "/";
+  }
+
+  async function sendOtpNow(userId: string, email: string) {
+    try {
+      const r = await fetch("http://127.0.0.1:8000/otp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, email }),
+      });
+
+      const json = await r.json();
+
+      if (!r.ok) {
+        setErrors({ form: `OTP send failed: ${json?.detail ?? "Unknown error"}` });
+        return;
+      }
+
+      setMsg(json?.message ? `${json.message}` : "OTP sent to your email.");
+    } catch (err: any) {
+      setErrors({ form: `OTP send failed: ${err?.message ?? "Network error"}` });
+    }
+  }
+
+  // ✅ LOGIN: redirect if verified, otherwise show OTP step only when verification is required
   async function login(e: React.FormEvent) {
     e.preventDefault();
     clearMessages();
@@ -64,8 +113,63 @@ export default function LoginPage() {
       password: loginPassword,
     });
 
+    if (error) {
+      setLoading(false);
+      setMsg(`Login error: ${error.message}`);
+      return;
+    }
+
+    // Get user id
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData.user?.id;
+
+    if (!userId) {
+      setLoading(false);
+      setMsg("Logged in, but user session not found. Try again.");
+      return;
+    }
+
+    // Check verification
+    const { data: profile, error: profErr } = await supabase
+      .from("profiles")
+      .select("is_verified")
+      .eq("id", userId)
+      .single();
+
+    if (profErr) {
+      setLoading(false);
+      setMsg(`Profile error: ${profErr.message}`);
+      return;
+    }
+
+    // ✅ If verified -> go to next page
+    if (profile?.is_verified) {
+      setLoading(false);
+      setMsg("Logged in successfully ✅ Redirecting...");
+      setTimeout(goNext, 600);
+      return;
+    }
+
+    // ✅ If NOT verified and verification is required -> show OTP step (do NOT auto-send)
+    if (verifyRequired || nextUrl === "/report") {
+      setLoading(false);
+
+      setMode("register");     // reuse OTP UI
+      setRegStep(2);
+      setOtp("");
+      setOtpUserId(userId);
+
+      // put login credentials into reg fields so verifyOtp can login after success (if needed)
+      setRegEmail(loginEmail);
+      setRegPassword(loginPassword);
+
+      setMsg("Your account is not verified. Click 'Send OTP' then enter the code.");
+      return;
+    }
+
+    // fallback
     setLoading(false);
-    setMsg(error ? `Login error: ${error.message}` : "Logged in successfully ✅");
+    setMsg("Logged in ✅");
   }
 
   async function registerStep1(e: React.FormEvent) {
@@ -73,13 +177,13 @@ export default function LoginPage() {
     clearMessages();
 
     const newErrors: FieldErrors = {};
-
     const nameErr = validateFullName(fullName);
     if (nameErr) newErrors.fullName = nameErr;
 
     if (!regEmail.trim()) newErrors.email = "Email is required.";
     if (!regPassword) newErrors.password = "Password is required.";
-    if (regPassword && regPassword.length < 6) newErrors.password = "Password must be at least 6 characters.";
+    if (regPassword && regPassword.length < 6)
+      newErrors.password = "Password must be at least 6 characters.";
     if (!confirmPassword) newErrors.confirmPassword = "Confirm password is required.";
     if (regPassword && confirmPassword && regPassword !== confirmPassword) {
       newErrors.confirmPassword = "Passwords do not match.";
@@ -105,7 +209,7 @@ export default function LoginPage() {
       return;
     }
 
-    // 2) Update profiles (trigger already creates row)
+    // 2) Update profiles
     const userId = signUpData.user?.id;
     if (userId) {
       const { error: profileError } = await supabase
@@ -115,100 +219,75 @@ export default function LoginPage() {
 
       if (profileError) {
         setLoading(false);
-        setErrors({ form: `Registered, but profile update failed: ${profileError.message}` });
+        setErrors({
+          form: `Registered, but profile update failed: ${profileError.message}`,
+        });
         return;
       }
     }
 
-    // 3) Call FastAPI to generate OTP, then switch UI to OTP step
-try {
-  const r = await fetch("http://127.0.0.1:8000/otp/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: userId,
-      email: regEmail,
-    }),
-  });
-
-  const json = await r.json();
-
-  if (!r.ok) {
     setLoading(false);
-    setErrors({ form: `OTP send failed: ${json?.detail ?? "Unknown error"}` });
-    return;
-  }
-
-  setLoading(false);
-  setRegStep(2);
-
-  // TEST MODE: backend returns OTP in response so you can verify it works.
-  // We'll remove this message after we add real email sending.
-  setMsg(`OTP generated (test): ${json.otp} (expires in 10 min)`);
-} catch (err: any) {
-  setLoading(false);
-  setErrors({ form: `OTP send failed: ${err?.message ?? "Network error"}` });
-  return;
-}
+    setRegStep(2);
+    setOtp("");
+    setOtpUserId(userId ?? null);
+    setMsg("Account created. Click 'Send OTP' to verify your email.");
   }
 
   async function verifyOtp(e: React.FormEvent) {
-  e.preventDefault();
-  clearMessages();
+    e.preventDefault();
+    clearMessages();
 
-  const newErrors: FieldErrors = {};
-  const otpTrim = otp.trim();
+    const newErrors: FieldErrors = {};
+    const otpTrim = otp.trim();
 
-  if (!otpTrim) newErrors.otp = "OTP is required.";
-  if (otpTrim && !/^\d{6}$/.test(otpTrim)) newErrors.otp = "OTP must be 6 digits.";
+    if (!otpTrim) newErrors.otp = "OTP is required.";
+    if (otpTrim && !/^\d{6}$/.test(otpTrim)) newErrors.otp = "OTP must be 6 digits.";
 
-  if (Object.keys(newErrors).length > 0) {
-    setErrors(newErrors);
-    return;
-  }
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
 
-  setLoading(true);
+    setLoading(true);
 
-  try {
-    // 1) Verify OTP in backend
-    const r = await fetch("http://127.0.0.1:8000/otp/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: regEmail,   // uses the email from registration step
-        otp: otpTrim,
-      }),
-    });
+    try {
+      const r = await fetch("http://127.0.0.1:8000/otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: regEmail,
+          otp: otpTrim,
+        }),
+      });
 
-    const json = await r.json();
+      const json = await r.json();
 
-    if (!r.ok) {
+      if (!r.ok) {
+        setLoading(false);
+        setErrors({ form: `OTP verify failed: ${json?.detail ?? "Unknown error"}` });
+        return;
+      }
+
+      // After verification, ensure user is logged in
+      const { error: loginError } = await supabase.auth.signInWithPassword({
+        email: regEmail,
+        password: regPassword,
+      });
+
       setLoading(false);
-      setErrors({ form: `OTP verify failed: ${json?.detail ?? "Unknown error"}` });
-      return;
+
+      if (loginError) {
+        setErrors({ form: `Verified, but login failed: ${loginError.message}` });
+        return;
+      }
+
+      setMsg("Email verified ✅ Redirecting...");
+      setTimeout(goNext, 700);
+    } catch (err: any) {
+      setLoading(false);
+      setErrors({ form: `OTP verify failed: ${err?.message ?? "Network error"}` });
     }
-
-    // 2) After verification, log the user in (if not already)
-    const { error: loginError } = await supabase.auth.signInWithPassword({
-      email: regEmail,
-      password: regPassword,
-    });
-
-    setLoading(false);
-
-    if (loginError) {
-      setErrors({ form: `Verified, but login failed: ${loginError.message}` });
-      return;
-    }
-
-    setMsg("Email verified ✅ Account ready!");
-    // Optional: redirect later (we’ll do it next step)
-    // window.location.href = "/";
-  } catch (err: any) {
-    setLoading(false);
-    setErrors({ form: `OTP verify failed: ${err?.message ?? "Network error"}` });
   }
-}
 
   return (
     <main style={{ minHeight: "100vh", background: "#f5f7fb" }}>
@@ -226,6 +305,10 @@ try {
             <h1 style={{ margin: 0, fontSize: 24, color: "#111827" }}>CivicAI</h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 14 }}>
               Login or create an account to submit complaints.
+            </p>
+
+            <p style={{ margin: "10px 0 0", color: "#6b7280", fontSize: 12 }}>
+              After login you will be redirected to: <b>{nextUrl}</b>
             </p>
           </div>
 
@@ -301,7 +384,7 @@ try {
                 <form onSubmit={registerStep1}>
                   <Label text="Full name" />
                   <Input
-                    placeholder="Sabiha Akter"
+                    placeholder="Nico Robin"
                     value={fullName}
                     onChange={setFullName}
                     disabled={loading}
@@ -366,12 +449,32 @@ try {
                   />
                   {errors.otp && <FieldError text={errors.otp} />}
 
-                  <div style={{ height: 18 }} />
+                  <div style={{ height: 12 }} />
 
-                  <PrimaryButton
-                    disabled={loading}
-                    text={loading ? "Verifying..." : "Verify OTP"}
-                  />
+                  <button
+                    type="button"
+                    disabled={loading || !otpUserId || !regEmail}
+                    onClick={() => {
+                      if (otpUserId && regEmail) sendOtpNow(otpUserId, regEmail);
+                    }}
+                    style={{
+                      width: "100%",
+                      padding: "11px 12px",
+                      borderRadius: 10,
+                      border: "1px solid #d1d5db",
+                      background: "#ffffff",
+                      color: "#111827",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Send OTP
+                  </button>
+
+                  <div style={{ height: 12 }} />
+
+                  <PrimaryButton disabled={loading} text={loading ? "Verifying..." : "Verify OTP"} />
 
                   <button
                     type="button"
