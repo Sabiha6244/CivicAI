@@ -5,21 +5,24 @@ import ReportForm from "./ReportForm";
 export default async function ReportPage() {
   const supabase = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-  // Not logged in -> go to login and then come back to /report
-  if (!user) {
+  // Not signed in -> send user to login, then back to /report
+  if (userError || !user) {
     redirect("/login?next=/report");
   }
 
-  // Must be OTP verified
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("is_verified")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
-  if (!profile?.is_verified) {
+  // Missing profile, query error, or not verified -> require verification
+  if (profileError || !profile?.is_verified) {
     redirect("/login?next=/report&verify=1");
   }
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Mode = "login" | "register";
@@ -22,16 +23,56 @@ function validateFullName(name: string) {
   const words = trimmed.split(/\s+/);
   for (const w of words) {
     if (!/^[A-Z][a-z]*$/.test(w)) {
-      return "Each word must start with a capital letter (e.g., Nico Robin).";
+      return "Each word must start with a capital letter (for example, Nico Robin).";
     }
   }
   return undefined;
 }
 
+function formatTime(seconds: number) {
+  const s = Math.max(0, seconds);
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function formatDateTime(date: Date | null) {
+  if (!date) return "";
+  return date.toLocaleString();
+}
+
 export default function LoginPage() {
-  // read redirect target from URL (server redirects to /login?next=/report&verify=1)
+  const router = useRouter();
+
   const [nextUrl, setNextUrl] = useState<string>("/");
   const [verifyRequired, setVerifyRequired] = useState(false);
+
+  const [mode, setMode] = useState<Mode>("login");
+
+  // login
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  // register
+  const [fullName, setFullName] = useState("");
+  const [regEmail, setRegEmail] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // otp
+  const [regStep, setRegStep] = useState<1 | 2>(1);
+  const [otp, setOtp] = useState("");
+  const [otpUserId, setOtpUserId] = useState<string | null>(null);
+
+  const [msg, setMsg] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [loading, setLoading] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+
+  // timing
+  const [cooldownLeft, setCooldownLeft] = useState(0);
+  const [expiresLeft, setExpiresLeft] = useState(0);
+  const [lastOtpSentAt, setLastOtpSentAt] = useState<Date | null>(null);
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
@@ -43,133 +84,158 @@ export default function LoginPage() {
     setVerifyRequired(p.get("verify") === "1");
   }, []);
 
-  const [mode, setMode] = useState<Mode>("login");
-
-  // login
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-
-  // register step 1
-  const [fullName, setFullName] = useState("");
-  const [regEmail, setRegEmail] = useState("");
-  const [regPassword, setRegPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-
-  // register step 2 (otp)
-  const [regStep, setRegStep] = useState<1 | 2>(1);
-  const [otp, setOtp] = useState("");
-
-  // Keep userId so we can send OTP after login if needed
-  const [otpUserId, setOtpUserId] = useState<string | null>(null);
-
-  const [msg, setMsg] = useState<string | null>(null);
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [loading, setLoading] = useState(false);
-
   useEffect(() => {
     if (verifyRequired) {
-      setMsg("Email verification required to continue. Please login, then request OTP.");
+      setMsg(
+        "Verification is required before you can continue. Please sign in and complete email verification."
+      );
     }
   }, [verifyRequired]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setCooldownLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      setExpiresLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    return () => clearInterval(t);
+  }, []);
 
   function clearMessages() {
     setMsg(null);
     setErrors({});
   }
 
-  function goNext() {
-    window.location.href = nextUrl || "/";
+  async function goNext() {
+    router.replace(nextUrl || "/");
+    router.refresh();
+  }
+
+  async function getCurrentUser() {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user) {
+      throw new Error("Authenticated user not found.");
+    }
+
+    return user;
+  }
+
+  async function getVerifiedStatus(userId: string) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("is_verified")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Profile lookup failed: ${error.message}`);
+    }
+
+    return !!data?.is_verified;
   }
 
   async function sendOtpNow(userId: string, email: string) {
+    clearMessages();
+
+    if (cooldownLeft > 0) return;
+
+    setOtpSending(true);
+
     try {
       const r = await fetch("http://127.0.0.1:8000/otp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, email }),
+        body: JSON.stringify({ user_id: userId, email: email.trim() }),
       });
 
       const json = await r.json();
 
       if (!r.ok) {
-        setErrors({ form: `OTP send failed: ${json?.detail ?? "Unknown error"}` });
+        setErrors({
+          form: `Unable to send verification code: ${json?.detail ?? "Unknown error"}`,
+        });
         return;
       }
 
-      setMsg(json?.message ? `${json.message}` : "OTP sent to your email.");
+      const sentAt = json?.sent_at ? new Date(json.sent_at) : new Date();
+      const expiresAt = json?.expires_at ? new Date(json.expires_at) : null;
+      const cooldownSeconds =
+        typeof json?.cooldown_seconds === "number" ? json.cooldown_seconds : 60;
+
+      setLastOtpSentAt(sentAt);
+      setCooldownLeft(cooldownSeconds);
+
+      if (expiresAt) {
+        const sec = Math.max(
+          0,
+          Math.floor((expiresAt.getTime() - Date.now()) / 1000)
+        );
+        setExpiresLeft(sec);
+      } else {
+        setExpiresLeft(10 * 60);
+      }
+
+      setMsg(
+        "A verification code has been sent to your email address. Please enter the most recent code you received."
+      );
     } catch (err: any) {
-      setErrors({ form: `OTP send failed: ${err?.message ?? "Network error"}` });
+      setErrors({
+        form: `Unable to send verification code: ${err?.message ?? "Network error"}`,
+      });
+    } finally {
+      setOtpSending(false);
     }
   }
 
-  // ✅ LOGIN: redirect if verified, otherwise show OTP step only when verification is required
   async function login(e: React.FormEvent) {
     e.preventDefault();
     clearMessages();
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: loginEmail,
-      password: loginPassword,
-    });
+    try {
+      const email = loginEmail.trim();
 
-    if (error) {
-      setLoading(false);
-      setMsg(`Login error: ${error.message}`);
-      return;
-    }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPassword,
+      });
 
-    // Get user id
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData.user?.id;
+      if (error) {
+        setErrors({ form: `Sign-in failed: ${error.message}` });
+        return;
+      }
 
-    if (!userId) {
-      setLoading(false);
-      setMsg("Logged in, but user session not found. Try again.");
-      return;
-    }
+      const user = await getCurrentUser();
+      const isVerified = await getVerifiedStatus(user.id);
 
-    // Check verification
-    const { data: profile, error: profErr } = await supabase
-      .from("profiles")
-      .select("is_verified")
-      .eq("id", userId)
-      .single();
+      if (isVerified) {
+        setMsg("Sign-in successful. Redirecting...");
+        await goNext();
+        return;
+      }
 
-    if (profErr) {
-      setLoading(false);
-      setMsg(`Profile error: ${profErr.message}`);
-      return;
-    }
-
-    // ✅ If verified -> go to next page
-    if (profile?.is_verified) {
-      setLoading(false);
-      setMsg("Logged in successfully ✅ Redirecting...");
-      setTimeout(goNext, 600);
-      return;
-    }
-
-    // ✅ If NOT verified and verification is required -> show OTP step (do NOT auto-send)
-    if (verifyRequired || nextUrl === "/report") {
-      setLoading(false);
-
-      setMode("register");     // reuse OTP UI
+      setMode("register");
       setRegStep(2);
-      setOtp("");
-      setOtpUserId(userId);
-
-      // put login credentials into reg fields so verifyOtp can login after success (if needed)
-      setRegEmail(loginEmail);
+      setRegEmail(email);
       setRegPassword(loginPassword);
+      setOtpUserId(user.id);
+      setOtp("");
+      setCooldownLeft(0);
+      setExpiresLeft(0);
+      setLastOtpSentAt(null);
 
-      setMsg("Your account is not verified. Click 'Send OTP' then enter the code.");
-      return;
+      setMsg(
+        "Your account has not been verified yet. Please request a verification code and enter it below."
+      );
+    } catch (err: any) {
+      setErrors({ form: err?.message ?? "Something went wrong during sign-in." });
+    } finally {
+      setLoading(false);
     }
-
-    // fallback
-    setLoading(false);
-    setMsg("Logged in ✅");
   }
 
   async function registerStep1(e: React.FormEvent) {
@@ -182,9 +248,10 @@ export default function LoginPage() {
 
     if (!regEmail.trim()) newErrors.email = "Email is required.";
     if (!regPassword) newErrors.password = "Password is required.";
-    if (regPassword && regPassword.length < 6)
+    if (regPassword && regPassword.length < 6) {
       newErrors.password = "Password must be at least 6 characters.";
-    if (!confirmPassword) newErrors.confirmPassword = "Confirm password is required.";
+    }
+    if (!confirmPassword) newErrors.confirmPassword = "Please confirm your password.";
     if (regPassword && confirmPassword && regPassword !== confirmPassword) {
       newErrors.confirmPassword = "Passwords do not match.";
     }
@@ -196,52 +263,80 @@ export default function LoginPage() {
 
     setLoading(true);
 
-    // 1) Create auth user
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-      email: regEmail,
-      password: regPassword,
-      options: { data: { full_name: fullName.trim() } },
-    });
+    try {
+      const email = regEmail.trim();
 
-    if (signUpError) {
-      setLoading(false);
-      setErrors({ form: `Register error: ${signUpError.message}` });
-      return;
-    }
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password: regPassword,
+        options: {
+          data: { full_name: fullName.trim() },
+        },
+      });
 
-    // 2) Update profiles
-    const userId = signUpData.user?.id;
-    if (userId) {
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ full_name: fullName.trim() })
-        .eq("id", userId);
+      if (signUpError) {
+        setErrors({ form: `Registration failed: ${signUpError.message}` });
+        return;
+      }
 
-      if (profileError) {
-        setLoading(false);
+      const userId = signUpData.user?.id;
+
+      if (!userId) {
         setErrors({
-          form: `Registered, but profile update failed: ${profileError.message}`,
+          form: "Your account was created, but the user ID was not returned. Please try signing in.",
         });
         return;
       }
-    }
 
-    setLoading(false);
-    setRegStep(2);
-    setOtp("");
-    setOtpUserId(userId ?? null);
-    setMsg("Account created. Click 'Send OTP' to verify your email.");
+      const { error: profileError } = await supabase.from("profiles").upsert(
+        {
+          id: userId,
+          full_name: fullName.trim(),
+          is_verified: false,
+        },
+        { onConflict: "id" }
+      );
+
+      if (profileError) {
+        setErrors({
+          form: `Your account was created, but profile setup failed: ${profileError.message}`,
+        });
+        return;
+      }
+
+      setOtpUserId(userId);
+      setRegEmail(email);
+      setRegStep(2);
+      setOtp("");
+      setCooldownLeft(0);
+      setExpiresLeft(0);
+      setLastOtpSentAt(null);
+
+      setMsg(
+        "Your account has been created. Please request a verification code to activate your account."
+      );
+    } catch (err: any) {
+      setErrors({ form: err?.message ?? "Something went wrong during registration." });
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function verifyOtp(e: React.FormEvent) {
     e.preventDefault();
     clearMessages();
 
-    const newErrors: FieldErrors = {};
     const otpTrim = otp.trim();
+    const newErrors: FieldErrors = {};
 
-    if (!otpTrim) newErrors.otp = "OTP is required.";
-    if (otpTrim && !/^\d{6}$/.test(otpTrim)) newErrors.otp = "OTP must be 6 digits.";
+    if (!otpUserId) {
+      newErrors.form = "User ID is missing. Please request a new verification code.";
+    }
+
+    if (!otpTrim) newErrors.otp = "Verification code is required.";
+    if (otpTrim && !/^\d{6}$/.test(otpTrim)) {
+      newErrors.otp = "Verification code must contain exactly 6 digits.";
+    }
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -255,7 +350,8 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: regEmail,
+          user_id: otpUserId,
+          email: regEmail.trim(),
           otp: otpTrim,
         }),
       });
@@ -263,31 +359,59 @@ export default function LoginPage() {
       const json = await r.json();
 
       if (!r.ok) {
-        setLoading(false);
-        setErrors({ form: `OTP verify failed: ${json?.detail ?? "Unknown error"}` });
+        setErrors({
+          form: `Verification failed: ${json?.detail ?? "Unknown error"}`,
+        });
         return;
       }
 
-      // After verification, ensure user is logged in
       const { error: loginError } = await supabase.auth.signInWithPassword({
-        email: regEmail,
+        email: regEmail.trim(),
         password: regPassword,
       });
 
-      setLoading(false);
-
       if (loginError) {
-        setErrors({ form: `Verified, but login failed: ${loginError.message}` });
+        setErrors({
+          form: `Verification succeeded, but automatic sign-in failed: ${loginError.message}`,
+        });
         return;
       }
 
-      setMsg("Email verified ✅ Redirecting...");
-      setTimeout(goNext, 700);
+      const user = await getCurrentUser();
+      const isVerified = await getVerifiedStatus(user.id);
+
+      if (!isVerified) {
+        setErrors({
+          form: "Verification was accepted, but your profile is not yet marked as verified.",
+        });
+        return;
+      }
+
+      setMsg("Your email address has been verified successfully. Redirecting...");
+      await goNext();
     } catch (err: any) {
+      setErrors({ form: err?.message ?? "Something went wrong during verification." });
+    } finally {
       setLoading(false);
-      setErrors({ form: `OTP verify failed: ${err?.message ?? "Network error"}` });
     }
   }
+
+  const otpStatusText = useMemo(() => {
+    if (cooldownLeft > 0) {
+      return `You can request a new code in ${formatTime(cooldownLeft)}.`;
+    }
+    return "You may request a new verification code now.";
+  }, [cooldownLeft]);
+
+  const otpExpiryText = useMemo(() => {
+    if (expiresLeft > 0) {
+      return `Current code expires in ${formatTime(expiresLeft)}.`;
+    }
+    if (lastOtpSentAt) {
+      return "The previous code may have expired. Please request a new one if needed.";
+    }
+    return "A verification code becomes active after you request one.";
+  }, [expiresLeft, lastOtpSentAt]);
 
   return (
     <main style={{ minHeight: "100vh", background: "#f5f7fb" }}>
@@ -304,15 +428,13 @@ export default function LoginPage() {
           <div style={{ marginBottom: 16 }}>
             <h1 style={{ margin: 0, fontSize: 24, color: "#111827" }}>CivicAI</h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 14 }}>
-              Login or create an account to submit complaints.
+              Sign in or create an account to continue.
             </p>
-
             <p style={{ margin: "10px 0 0", color: "#6b7280", fontSize: 12 }}>
-              After login you will be redirected to: <b>{nextUrl}</b>
+              After authentication, you will be redirected to: <b>{nextUrl}</b>
             </p>
           </div>
 
-          {/* Tabs */}
           <div
             style={{
               display: "flex",
@@ -331,31 +453,33 @@ export default function LoginPage() {
                 setOtp("");
                 clearMessages();
               }}
-              disabled={loading}
+              disabled={loading || otpSending}
               style={tabStyle(mode === "login")}
             >
-              Login
+              Sign in
             </button>
 
             <button
               type="button"
               onClick={() => {
                 setMode("register");
+                setRegStep(1);
+                setOtp("");
                 clearMessages();
               }}
-              disabled={loading}
+              disabled={loading || otpSending}
               style={tabStyle(mode === "register")}
             >
               Register
             </button>
           </div>
 
-          {errors.form && <InlineAlert text={errors.form} />}
-          {msg && <InlineAlert text={msg} />}
+          {errors.form && <InlineAlert text={errors.form} variant="error" />}
+          {msg && <InlineAlert text={msg} variant="info" />}
 
           {mode === "login" ? (
             <form onSubmit={login}>
-              <Label text="Email" />
+              <Label text="Email address" />
               <Input
                 placeholder="name@example.com"
                 value={loginEmail}
@@ -367,7 +491,7 @@ export default function LoginPage() {
 
               <Label text="Password" />
               <Input
-                placeholder="Your password"
+                placeholder="Enter your password"
                 type="password"
                 value={loginPassword}
                 onChange={setLoginPassword}
@@ -376,7 +500,10 @@ export default function LoginPage() {
 
               <div style={{ height: 18 }} />
 
-              <PrimaryButton disabled={loading} text={loading ? "Signing in..." : "Sign in"} />
+              <PrimaryButton
+                disabled={loading}
+                text={loading ? "Signing in..." : "Sign in"}
+              />
             </form>
           ) : (
             <>
@@ -394,7 +521,7 @@ export default function LoginPage() {
 
                   <div style={{ height: 12 }} />
 
-                  <Label text="Email" />
+                  <Label text="Email address" />
                   <Input
                     placeholder="name@example.com"
                     value={regEmail}
@@ -421,7 +548,7 @@ export default function LoginPage() {
 
                   <Label text="Confirm password" />
                   <Input
-                    placeholder="Re-type password"
+                    placeholder="Re-enter your password"
                     type="password"
                     value={confirmPassword}
                     onChange={setConfirmPassword}
@@ -439,9 +566,9 @@ export default function LoginPage() {
                 </form>
               ) : (
                 <form onSubmit={verifyOtp}>
-                  <Label text="Enter OTP (6 digits)" />
+                  <Label text="Verification code" />
                   <Input
-                    placeholder="123456"
+                    placeholder="Enter the latest 6-digit code"
                     value={otp}
                     onChange={setOtp}
                     disabled={loading}
@@ -449,11 +576,36 @@ export default function LoginPage() {
                   />
                   {errors.otp && <FieldError text={errors.otp} />}
 
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "#f9fafb",
+                      border: "1px solid #e5e7eb",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: "#111827", fontWeight: 600 }}>
+                      Verification status
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: "#4b5563" }}>
+                      {otpStatusText}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: "#4b5563" }}>
+                      {otpExpiryText}
+                    </div>
+                    {lastOtpSentAt && (
+                      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                        Last code sent: {formatDateTime(lastOtpSentAt)}
+                      </div>
+                    )}
+                  </div>
+
                   <div style={{ height: 12 }} />
 
                   <button
                     type="button"
-                    disabled={loading || !otpUserId || !regEmail}
+                    disabled={loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail}
                     onClick={() => {
                       if (otpUserId && regEmail) sendOtpNow(otpUserId, regEmail);
                     }}
@@ -462,19 +614,32 @@ export default function LoginPage() {
                       padding: "11px 12px",
                       borderRadius: 10,
                       border: "1px solid #d1d5db",
-                      background: "#ffffff",
+                      background:
+                        loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail
+                          ? "#f3f4f6"
+                          : "#ffffff",
                       color: "#111827",
                       fontSize: 14,
                       fontWeight: 700,
-                      cursor: "pointer",
+                      cursor:
+                        loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail
+                          ? "not-allowed"
+                          : "pointer",
                     }}
                   >
-                    Send OTP
+                    {otpSending
+                      ? "Sending code..."
+                      : cooldownLeft > 0
+                      ? `Resend available in ${formatTime(cooldownLeft)}`
+                      : "Send verification code"}
                   </button>
 
                   <div style={{ height: 12 }} />
 
-                  <PrimaryButton disabled={loading} text={loading ? "Verifying..." : "Verify OTP"} />
+                  <PrimaryButton
+                    disabled={loading}
+                    text={loading ? "Verifying..." : "Verify and continue"}
+                  />
 
                   <button
                     type="button"
@@ -483,7 +648,7 @@ export default function LoginPage() {
                       setOtp("");
                       clearMessages();
                     }}
-                    disabled={loading}
+                    disabled={loading || otpSending}
                     style={{
                       width: "100%",
                       marginTop: 10,
@@ -509,7 +674,6 @@ export default function LoginPage() {
   );
 }
 
-/** UI helpers */
 function tabStyle(active: boolean): React.CSSProperties {
   return {
     flex: 1,
@@ -523,16 +687,24 @@ function tabStyle(active: boolean): React.CSSProperties {
   };
 }
 
-function InlineAlert({ text }: { text: string }) {
+function InlineAlert({
+  text,
+  variant = "info",
+}: {
+  text: string;
+  variant?: "info" | "error";
+}) {
+  const isError = variant === "error";
+
   return (
     <div
       style={{
         marginBottom: 12,
         padding: "10px 12px",
         borderRadius: 10,
-        background: "#f9fafb",
-        border: "1px solid #e5e7eb",
-        color: "#111827",
+        background: isError ? "#fef2f2" : "#f9fafb",
+        border: isError ? "1px solid #fecaca" : "1px solid #e5e7eb",
+        color: isError ? "#991b1b" : "#111827",
         fontSize: 14,
       }}
     >
