@@ -4,7 +4,13 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./report.module.css";
-import { divisions, districts, upazilas, unions } from "./bdAddress";
+import {
+  divisions,
+  districts,
+  upazilas,
+  dhakaCityAreas,
+  postcodes,
+} from "./bdAddress";
 
 export default function ReportForm({ userId }: { userId: string }) {
   const router = useRouter();
@@ -13,7 +19,8 @@ export default function ReportForm({ userId }: { userId: string }) {
   const [division, setDivision] = useState("");
   const [district, setDistrict] = useState("");
   const [upazila, setUpazila] = useState("");
-  const [unionName, setUnionName] = useState("");
+  const [cityArea, setCityArea] = useState("");
+  const [postCode, setPostCode] = useState("");
   const [locationDetails, setLocationDetails] = useState("");
 
   const [title, setTitle] = useState("");
@@ -30,6 +37,8 @@ export default function ReportForm({ userId }: { userId: string }) {
     return districts.filter((item) => item.division_id === selectedDivision.id);
   }, [division]);
 
+  const isDhakaDistrict = division === "Dhaka" && district === "Dhaka";
+
   const availableUpazilas = useMemo(() => {
     if (!district) return [];
     const selectedDistrict = districts.find((item) => item.name === district);
@@ -37,27 +46,50 @@ export default function ReportForm({ userId }: { userId: string }) {
     return upazilas.filter((item) => item.district_id === selectedDistrict.id);
   }, [district]);
 
-  const availableUnions = useMemo(() => {
-    if (!upazila) return [];
-    const selectedUpazila = upazilas.find((item) => item.name === upazila);
-    if (!selectedUpazila) return [];
-    return unions.filter((item) => item.upazilla_id === selectedUpazila.id);
-  }, [upazila]);
+  const availableDhakaCityAreas = useMemo(() => {
+    if (!isDhakaDistrict) return [];
+    const selectedDistrict = districts.find((item) => item.name === district);
+    if (!selectedDistrict) return [];
+    return dhakaCityAreas.filter((item) => item.district_id === selectedDistrict.id);
+  }, [district, isDhakaDistrict]);
+
+  const availablePostcodes = useMemo(() => {
+    const selectedDivision = divisions.find((item) => item.name === division);
+    const selectedDistrict = districts.find((item) => item.name === district);
+
+    if (!selectedDivision || !selectedDistrict) return [];
+
+    return postcodes.filter((item) => {
+      const sameDivision = item.division_id === selectedDivision.id;
+      const sameDistrict = item.district_id === selectedDistrict.id;
+
+      if (!sameDivision || !sameDistrict) return false;
+
+      if (upazila) {
+        return item.upazila === upazila;
+      }
+
+      return true;
+    });
+  }, [division, district, upazila]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
 
-    if (
+    const missingBase =
       !reporterName.trim() ||
       !division ||
       !district ||
-      !upazila ||
-      !unionName ||
       !locationDetails.trim() ||
       !title.trim() ||
-      !description.trim()
-    ) {
+      !description.trim();
+
+    const missingAreaSelection = isDhakaDistrict
+      ? !upazila && !cityArea
+      : !upazila;
+
+    if (missingBase || missingAreaSelection) {
       setMsgType("error");
       setMsg("Please complete all required fields before submitting.");
       return;
@@ -65,12 +97,14 @@ export default function ReportForm({ userId }: { userId: string }) {
 
     setLoading(true);
 
+    const areaLabel = cityArea || upazila;
+
     const addressLabel = [
       locationDetails.trim(),
-      unionName,
-      upazila,
+      areaLabel,
       district,
       division,
+      postCode,
       "Bangladesh",
     ]
       .filter(Boolean)
@@ -81,8 +115,9 @@ export default function ReportForm({ userId }: { userId: string }) {
       reporter_name: reporterName.trim(),
       division,
       district,
-      upazila,
-      union_name: unionName,
+      upazila: upazila || null,
+      city_area: cityArea || null,
+      post_code: postCode || null,
       location_details: locationDetails.trim(),
       address_label: addressLabel,
       title: title.trim(),
@@ -102,7 +137,8 @@ export default function ReportForm({ userId }: { userId: string }) {
     setDivision("");
     setDistrict("");
     setUpazila("");
-    setUnionName("");
+    setCityArea("");
+    setPostCode("");
     setLocationDetails("");
     setTitle("");
     setDescription("");
@@ -127,7 +163,7 @@ export default function ReportForm({ userId }: { userId: string }) {
           <div className={styles.cardHeader}>
             <h2 className={styles.cardTitle}>Complaint details</h2>
             <p className={styles.cardText}>
-              Fill in your name, location, and complaint details carefully.
+              Fill in your name, address, and complaint details carefully.
             </p>
           </div>
 
@@ -151,7 +187,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                   setDivision(e.target.value);
                   setDistrict("");
                   setUpazila("");
-                  setUnionName("");
+                  setCityArea("");
+                  setPostCode("");
                 }}
                 className={styles.input}
                 disabled={loading}
@@ -172,7 +209,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                 onChange={(e) => {
                   setDistrict(e.target.value);
                   setUpazila("");
-                  setUnionName("");
+                  setCityArea("");
+                  setPostCode("");
                 }}
                 className={styles.input}
                 disabled={loading || !division}
@@ -187,15 +225,20 @@ export default function ReportForm({ userId }: { userId: string }) {
             </div>
 
             <div>
-              <label className={styles.label}>Upazila</label>
+              <label className={styles.label}>
+                Upazila {isDhakaDistrict ? "(choose this or Dhaka city area)" : ""}
+              </label>
               <select
                 value={upazila}
                 onChange={(e) => {
                   setUpazila(e.target.value);
-                  setUnionName("");
+                  setPostCode("");
+                  if (isDhakaDistrict && e.target.value) {
+                    setCityArea("");
+                  }
                 }}
                 className={styles.input}
-                disabled={loading || !district}
+                disabled={loading || !district || (isDhakaDistrict && !!cityArea)}
               >
                 <option value="">Select upazila</option>
                 {availableUpazilas.map((item) => (
@@ -206,18 +249,45 @@ export default function ReportForm({ userId }: { userId: string }) {
               </select>
             </div>
 
+            {isDhakaDistrict && (
+              <div>
+                <label className={styles.label}>
+                  Dhaka city area (choose this or Upazila)
+                </label>
+                <select
+                  value={cityArea}
+                  onChange={(e) => {
+                    setCityArea(e.target.value);
+                    if (e.target.value) {
+                      setUpazila("");
+                      setPostCode("");
+                    }
+                  }}
+                  className={styles.input}
+                  disabled={loading || !!upazila}
+                >
+                  <option value="">Select city area</option>
+                  {availableDhakaCityAreas.map((item, index) => (
+                    <option key={`${item.city_corporation}-${item.name}-${index}`} value={item.name}>
+                      {item.name} ({item.city_corporation})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div>
-              <label className={styles.label}>Union</label>
+              <label className={styles.label}>Post code</label>
               <select
-                value={unionName}
-                onChange={(e) => setUnionName(e.target.value)}
+                value={postCode}
+                onChange={(e) => setPostCode(e.target.value)}
                 className={styles.input}
-                disabled={loading || !upazila}
+                disabled={loading || !district}
               >
-                <option value="">Select union</option>
-                {availableUnions.map((item) => (
-                  <option key={item.id} value={item.name}>
-                    {item.name}
+                <option value="">Select post code</option>
+                {availablePostcodes.map((item, index) => (
+                  <option key={`${item.postCode}-${item.postOffice}-${index}`} value={item.postCode}>
+                    {item.postCode} - {item.postOffice}
                   </option>
                 ))}
               </select>

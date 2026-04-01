@@ -70,7 +70,7 @@
 
 .form {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
 .label {
@@ -92,6 +92,7 @@
   color: #0f172a;
   box-sizing: border-box;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  appearance: none;
 }
 
 .input:focus {
@@ -105,7 +106,7 @@
 }
 
 .textarea {
-  min-height: 160px;
+  min-height: 130px;
   resize: vertical;
   line-height: 1.6;
 }

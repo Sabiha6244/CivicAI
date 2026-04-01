@@ -1,7 +1,8 @@
 import divisionsRaw from "./data/bd-divisions.json";
 import districtsRaw from "./data/bd-districts.json";
 import upazilasRaw from "./data/bd-upazilas.json";
-import unionsRaw from "./data/unions.json";
+import dhakaCityRaw from "./data/dhaka-city.json";
+import postcodesRaw from "./data/bd-postcodes.json";
 
 export type DivisionItem = {
   id: string;
@@ -23,11 +24,20 @@ export type UpazilaItem = {
   bn_name?: string;
 };
 
-export type UnionItem = {
-  id: string;
-  upazilla_id: string;
+export type DhakaCityItem = {
+  division_id: string;
+  district_id: string;
+  city_corporation: string;
   name: string;
   bn_name?: string;
+};
+
+export type PostcodeItem = {
+  division_id: string;
+  district_id: string;
+  upazila: string;
+  postOffice: string;
+  postCode: string;
 };
 
 type DivisionsFile = {
@@ -42,29 +52,16 @@ type UpazilasFile = {
   upazilas: UpazilaItem[];
 };
 
-type UnionsFile = Array<
-  | { type: string }
-  | {
-      type: "table";
-      name: string;
-      database: string;
-      data: UnionItem[];
-    }
->;
+type DhakaCityFile = {
+  dhaka: DhakaCityItem[];
+};
+
+type PostcodesFile = {
+  postcodes: PostcodeItem[];
+};
 
 export const divisions = (divisionsRaw as DivisionsFile).divisions ?? [];
 export const districts = (districtsRaw as DistrictsFile).districts ?? [];
 export const upazilas = (upazilasRaw as UpazilasFile).upazilas ?? [];
-
-const unionsFile = unionsRaw as UnionsFile;
-
-const unionsTable = unionsFile.find(
-  (item): item is Extract<UnionsFile[number], { type: "table"; data: UnionItem[] }> =>
-    typeof item === "object" &&
-    item !== null &&
-    "type" in item &&
-    item.type === "table" &&
-    "data" in item
-);
-
-export const unions = unionsTable?.data ?? [];
+export const dhakaCityAreas = (dhakaCityRaw as DhakaCityFile).dhaka ?? [];
+export const postcodes = (postcodesRaw as PostcodesFile).postcodes ?? [];
