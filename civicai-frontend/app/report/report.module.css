@@ -1,0 +1,172 @@
+.page {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(15, 118, 110, 0.08) 0%, rgba(15, 118, 110, 0) 30%),
+    #f3f5f7;
+}
+
+.wrapper {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 52px 20px 72px;
+}
+
+.hero {
+  max-width: 760px;
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.subtitle {
+  margin: 14px 0 0;
+  color: #475569;
+  font-size: 1rem;
+  line-height: 1.7;
+  max-width: 700px;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #dbe3e8;
+  border-radius: 20px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+  padding: 28px;
+}
+
+.cardHeader {
+  margin-bottom: 20px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 1.3rem;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.cardText {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.form {
+  display: grid;
+  gap: 16px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  outline: none;
+  font-size: 0.95rem;
+  background: #ffffff;
+  color: #0f172a;
+  box-sizing: border-box;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+.input:disabled {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.textarea {
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.primaryButton {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: 1px solid #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.96rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: 0.2s ease;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.18);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: #115e59;
+  border-color: #115e59;
+}
+
+.primaryButton:disabled {
+  background: #99d5cf;
+  border-color: #99d5cf;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.alert {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.alertInfo {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  color: #115e59;
+}
+
+.alertError {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+@media (max-width: 640px) {
+  .wrapper {
+    padding: 28px 14px 44px;
+  }
+
+  .card {
+    padding: 20px 18px;
+    border-radius: 16px;
+  }
+
+  .title {
+    font-size: 2rem;
+  }
+}

@@ -1,12 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import styles from "./report.module.css";
 
 export default function ReportForm({ userId }: { userId: string }) {
+  const router = useRouter();
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgType, setMsgType] = useState<"info" | "error">("info");
   const [loading, setLoading] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -14,7 +19,8 @@ export default function ReportForm({ userId }: { userId: string }) {
     setMsg(null);
 
     if (!title.trim() || !description.trim()) {
-      setMsg("Please fill in title and description.");
+      setMsgType("error");
+      setMsg("Please complete both the title and description fields.");
       return;
     }
 
@@ -30,88 +36,72 @@ export default function ReportForm({ userId }: { userId: string }) {
     setLoading(false);
 
     if (error) {
-      setMsg(`Error: ${error.message}`);
+      setMsgType("error");
+      setMsg(`Unable to submit complaint: ${error.message}`);
       return;
     }
 
     setTitle("");
     setDescription("");
-    setMsg("Complaint submitted ✅ Redirecting...");
-    setTimeout(() => (window.location.href = "/"), 800);
+    setMsgType("info");
+    setMsg("Your complaint has been submitted successfully. Redirecting...");
+    setTimeout(() => router.replace("/"), 900);
   }
 
   return (
-    <main style={{ minHeight: "100vh", background: "#f5f7fb" }}>
-      <div style={{ maxWidth: 700, margin: "0 auto", padding: "28px 16px" }}>
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #e6e8ef",
-            borderRadius: 12,
-            boxShadow: "0 6px 18px rgba(20, 20, 43, 0.06)",
-            padding: 16,
-          }}
-        >
-          <h1 style={{ margin: 0, fontSize: 22, color: "#111827" }}>
-            Report a complaint
-          </h1>
-          <p style={{ margin: "6px 0 16px", color: "#6b7280", fontSize: 14 }}>
-            Submit a short title and a detailed description.
+    <main className={styles.page}>
+      <div className={styles.wrapper}>
+        <section className={styles.hero}>
+          <p className={styles.eyebrow}>Verified complaint reporting</p>
+          <h1 className={styles.title}>Report a civic complaint</h1>
+          <p className={styles.subtitle}>
+            Submit a clear summary and a detailed description so the issue can be
+            reviewed more effectively.
           </p>
+        </section>
 
-          <form onSubmit={submit}>
-            <label style={label}>Title</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g., Broken street light near ULAB gate"
-              style={input}
-              disabled={loading}
-            />
+        <div className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Complaint details</h2>
+            <p className={styles.cardText}>
+              Provide a short title and enough detail to explain the location,
+              condition, and impact of the issue.
+            </p>
+          </div>
 
-            <div style={{ height: 12 }} />
+          <form onSubmit={submit} className={styles.form}>
+            <div>
+              <label className={styles.label}>Title</label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="For example, Broken street light near main road"
+                className={styles.input}
+                disabled={loading}
+              />
+            </div>
 
-            <label style={label}>Description</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the problem, location, and any important details..."
-              style={{ ...input, height: 140, resize: "vertical" }}
-              disabled={loading}
-            />
+            <div>
+              <label className={styles.label}>Description</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Describe the problem, location, when you noticed it, and any important details..."
+                className={`${styles.input} ${styles.textarea}`}
+                disabled={loading}
+              />
+            </div>
 
-            <div style={{ height: 18 }} />
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: "100%",
-                padding: "11px 12px",
-                borderRadius: 10,
-                border: "1px solid #2563eb",
-                background: loading ? "#93c5fd" : "#2563eb",
-                color: "#ffffff",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: loading ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? "Submitting..." : "Submit"}
+            <button type="submit" disabled={loading} className={styles.primaryButton}>
+              {loading ? "Submitting..." : "Submit complaint"}
             </button>
           </form>
 
           {msg && (
             <div
-              style={{
-                marginTop: 16,
-                padding: "10px 12px",
-                borderRadius: 10,
-                background: "#f9fafb",
-                border: "1px solid #e5e7eb",
-                color: "#111827",
-                fontSize: 14,
-              }}
+              className={`${styles.alert} ${
+                msgType === "error" ? styles.alertError : styles.alertInfo
+              }`}
             >
               {msg}
             </div>
@@ -121,22 +111,3 @@ export default function ReportForm({ userId }: { userId: string }) {
     </main>
   );
 }
-
-const label: React.CSSProperties = {
-  display: "block",
-  fontSize: 13,
-  fontWeight: 700,
-  color: "#374151",
-  marginBottom: 6,
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #d1d5db",
-  outline: "none",
-  fontSize: 14,
-  color: "#111827",
-  background: "#ffffff",
-};

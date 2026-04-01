@@ -1,198 +1,199 @@
 import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient";
+import { createClient } from "@/lib/supabaseServer";
 import LogoutButton from "./components/LogoutButton";
-export default async function Home() {
-  // Public list (RLS allows anon/auth to read complaints)
+import styles from "./home.module.css";
+
+type ComplaintRow = {
+  id: string;
+  title: string | null;
+  status: string | null;
+  created_at: string;
+  address_label: string | null;
+  lat: number | null;
+  lng: number | null;
+};
+
+export default async function HomePage() {
+  const supabase = await createClient();
+
   const { data: complaints, error } = await supabase
     .from("v_complaints_dashboard")
-    .select("id, title, description, created_at, status, fusion_label, priority")
+    .select("id, title, status, created_at, address_label, lat, lng")
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(6);
+
+  const recentComplaints: ComplaintRow[] = complaints ?? [];
 
   return (
-    <main style={{ minHeight: "100vh", background: "#f5f7fb" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "28px 16px" }}>
-        {/* Header */}
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 16,
-          }}
-        >
-          <div>
-            <h1 style={{ margin: 0, fontSize: 26, color: "#111827" }}>CivicAI</h1>
-            <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 14 }}>
-              Report, view, and track local problems (public complaints list).
+    <main className={styles.page}>
+      <section className={styles.hero}>
+        <div className={styles.container}>
+          <header className={styles.topbar}>
+            <div>
+              <div className={styles.brand}>CivicAI</div>
+              <div className={styles.brandSub}>
+                Report and track local civic issues
+              </div>
+            </div>
+
+            <div className={styles.topbarActions}>
+              <Link href="/login" className={styles.navButtonSecondary}>
+                Sign in / Register
+              </Link>
+              <Link href="/report" className={styles.navButtonPrimary}>
+                Report a problem
+              </Link>
+              <LogoutButton />
+            </div>
+          </header>
+
+          <div className={styles.heroGrid}>
+            <div className={styles.heroContent}>
+              <p className={styles.eyebrow}>Community reporting platform</p>
+              <h1 className={styles.heroTitle}>
+                Help improve your area by reporting problems that matter.
+              </h1>
+              <p className={styles.heroText}>
+                CivicAI allows residents to report civic complaints, follow
+                progress, and stay informed about recent issues in their
+                community through a simple public-facing platform.
+              </p>
+
+              <div className={styles.heroActions}>
+                <Link href="/report" className={styles.heroPrimary}>
+                  Report a complaint
+                </Link>
+                <Link href="/login" className={styles.heroSecondary}>
+                  Create an account
+                </Link>
+              </div>
+            </div>
+
+            <div className={styles.heroPanel}>
+              <div className={styles.statCard}>
+                <div className={styles.statValue}>{recentComplaints.length}</div>
+                <div className={styles.statLabel}>Recent public complaints shown</div>
+              </div>
+
+              <div className={styles.infoCard}>
+                <h2 className={styles.infoTitle}>How it works</h2>
+                <ol className={styles.infoList}>
+                  <li>Read public complaint activity on the homepage.</li>
+                  <li>Create an account and verify your email.</li>
+                  <li>Submit complaints and track their status.</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.featuresSection}>
+        <div className={styles.container}>
+          <div className={styles.sectionHeader}>
+            <p className={styles.sectionEyebrow}>Platform features</p>
+            <h2 className={styles.sectionTitle}>Designed for citizens and transparency</h2>
+            <p className={styles.sectionText}>
+              The homepage is public so visitors can understand the platform,
+              review recent complaint activity, and decide whether to sign in to
+              report an issue.
             </p>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <Link href="/login" style={btnOutline}>
-              Login / Register
-            </Link>
-            <Link href="/report" style={btnPrimary}>
-              Report a complaint
+          <div className={styles.featureGrid}>
+            <div className={styles.featureCard}>
+              <h3 className={styles.featureTitle}>Public visibility</h3>
+              <p className={styles.featureText}>
+                Visitors can view recent complaints and understand the purpose of
+                the platform before creating an account.
+              </p>
+            </div>
+
+            <div className={styles.featureCard}>
+              <h3 className={styles.featureTitle}>Verified reporting</h3>
+              <p className={styles.featureText}>
+                Users register with email verification before reporting
+                complaints, helping keep submissions accountable.
+              </p>
+            </div>
+
+            <div className={styles.featureCard}>
+              <h3 className={styles.featureTitle}>Complaint tracking</h3>
+              <p className={styles.featureText}>
+                Reported issues can be reviewed with status information and
+                location-related details for better follow-up.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.complaintsSection}>
+        <div className={styles.container}>
+          <div className={styles.sectionHeaderRow}>
+            <div>
+              <p className={styles.sectionEyebrow}>Recent activity</p>
+              <h2 className={styles.sectionTitle}>Latest public complaints</h2>
+            </div>
+            <Link href="/report" className={styles.inlineAction}>
+              Report a new issue
             </Link>
           </div>
-          <LogoutButton />
-        </header>
-
-        {/* Content */}
-        <section
-          style={{
-            background: "#fff",
-            border: "1px solid #e6e8ef",
-            borderRadius: 12,
-            boxShadow: "0 6px 18px rgba(20, 20, 43, 0.06)",
-            padding: 16,
-          }}
-        >
-          <h2 style={{ margin: "4px 0 12px", fontSize: 18, color: "#111827" }}>
-            Recent complaints
-          </h2>
 
           {error ? (
-            <div style={alertBox}>
-              Error loading complaints: <b>{error.message}</b>
+            <div className={styles.alertBox}>
+              Unable to load recent complaints: <b>{error.message}</b>
             </div>
-          ) : !complaints || complaints.length === 0 ? (
-            <div style={emptyBox}>No complaints yet. Be the first to report one.</div>
+          ) : recentComplaints.length === 0 ? (
+            <div className={styles.emptyBox}>
+              No public complaints are available yet.
+            </div>
           ) : (
-            <div style={{ display: "grid", gap: 12 }}>
-              {complaints.map((c) => (
-                <div key={c.id} style={card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>
-                        {c.title?.trim() ? c.title : "Untitled complaint"}
+            <div className={styles.complaintList}>
+              {recentComplaints.map((item) => (
+                <article key={item.id} className={styles.complaintCard}>
+                  <div className={styles.complaintTop}>
+                    <div className={styles.complaintMain}>
+                      <h3 className={styles.complaintTitle}>
+                        {item.title?.trim() || "Untitled complaint"}
+                      </h3>
+
+                      <div className={styles.metaRow}>
+                        <span className={styles.metaItem}>
+                          {item.address_label?.trim() || "Location not specified"}
+                        </span>
+                        <span className={styles.metaDot}>•</span>
+                        <span className={styles.metaItem}>
+                          {new Date(item.created_at).toLocaleString()}
+                        </span>
                       </div>
-                      <div style={{ marginTop: 6, color: "#374151", fontSize: 14, lineHeight: 1.4 }}>
-                        {c.description?.length > 140
-                          ? c.description.slice(0, 140) + "…"
-                          : c.description}
-                      </div>
+
+                      {(item.lat !== null && item.lng !== null) && (
+                        <p className={styles.coords}>
+                          Coordinates: {item.lat}, {item.lng}
+                        </p>
+                      )}
                     </div>
 
-                    <div style={{ textAlign: "right", minWidth: 150 }}>
-                      <Badge label={c.priority ?? "—"} />
-                      <div style={{ height: 8 }} />
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
-                        {new Date(c.created_at).toLocaleString()}
-                      </div>
-                    </div>
+                    <StatusBadge label={item.status ?? "unknown"} />
                   </div>
-
-                  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <SmallTag label={`Status: ${c.status ?? "—"}`} />
-                    <SmallTag label={`AI: ${c.fusion_label ?? "pending"}`} />
-                  </div>
-                </div>
+                </article>
               ))}
             </div>
           )}
-        </section>
-      </div>
+        </div>
+      </section>
     </main>
   );
 }
 
-/* Simple UI styles */
-const btnPrimary: React.CSSProperties = {
-  display: "inline-block",
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #2563eb",
-  background: "#2563eb",
-  color: "#fff",
-  fontSize: 14,
-  fontWeight: 700,
-  textDecoration: "none",
-};
+function StatusBadge({ label }: { label: string }) {
+  const value = label.toLowerCase();
 
-const btnOutline: React.CSSProperties = {
-  display: "inline-block",
-  padding: "10px 14px",
-  borderRadius: 10,
-  border: "1px solid #d1d5db",
-  background: "#fff",
-  color: "#111827",
-  fontSize: 14,
-  fontWeight: 700,
-  textDecoration: "none",
-};
+  let className = styles.badgeNeutral;
+  if (value.includes("open")) className = styles.badgeOpen;
+  else if (value.includes("progress")) className = styles.badgeProgress;
+  else if (value.includes("resolved")) className = styles.badgeResolved;
 
-const card: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  padding: 14,
-  background: "#fff",
-};
-
-const alertBox: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  background: "#fff7ed",
-  border: "1px solid #fed7aa",
-  color: "#9a3412",
-  fontSize: 14,
-};
-
-const emptyBox: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  background: "#f9fafb",
-  border: "1px solid #e5e7eb",
-  color: "#111827",
-  fontSize: 14,
-};
-
-function Badge({ label }: { label: string }) {
-  const normalized = label.toLowerCase();
-  const style: React.CSSProperties = {
-    display: "inline-block",
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 800,
-    border: "1px solid #d1d5db",
-    background: "#f9fafb",
-    color: "#111827",
-  };
-
-  if (normalized === "high") {
-    style.background = "#fee2e2";
-    style.border = "1px solid #fecaca";
-    style.color = "#991b1b";
-  } else if (normalized === "medium") {
-    style.background = "#ffedd5";
-    style.border = "1px solid #fed7aa";
-    style.color = "#9a3412";
-  } else if (normalized === "low") {
-    style.background = "#dcfce7";
-    style.border = "1px solid #bbf7d0";
-    style.color = "#166534";
-  }
-
-  return <span style={style}>{label}</span>;
-}
-
-function SmallTag({ label }: { label: string }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "4px 10px",
-        borderRadius: 999,
-        fontSize: 12,
-        border: "1px solid #e5e7eb",
-        background: "#f9fafb",
-        color: "#374151",
-      }}
-    >
-      {label}
-    </span>
-  );
+  return <span className={`${styles.badge} ${className}`}>{label}</span>;
 }
