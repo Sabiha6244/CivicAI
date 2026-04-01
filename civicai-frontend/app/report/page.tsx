@@ -10,7 +10,6 @@ export default async function ReportPage() {
     error: userError,
   } = await supabase.auth.getUser();
 
-  // Not signed in -> send user to login, then back to /report
   if (userError || !user) {
     redirect("/login?next=/report");
   }
@@ -21,7 +20,6 @@ export default async function ReportPage() {
     .eq("id", user.id)
     .maybeSingle();
 
-  // Missing profile, query error, or not verified -> require verification
   if (profileError || !profile?.is_verified) {
     redirect("/login?next=/report&verify=1");
   }

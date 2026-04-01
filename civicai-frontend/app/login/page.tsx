@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import styles from "./login.module.css";
 
 type Mode = "login" | "register";
 
@@ -14,6 +15,9 @@ type FieldErrors = {
   otp?: string;
   form?: string;
 };
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
 function validateFullName(name: string) {
   const trimmed = name.trim();
@@ -46,20 +50,16 @@ export default function LoginPage() {
 
   const [nextUrl, setNextUrl] = useState<string>("/");
   const [verifyRequired, setVerifyRequired] = useState(false);
-
   const [mode, setMode] = useState<Mode>("login");
 
-  // login
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
 
-  // register
   const [fullName, setFullName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  // otp
   const [regStep, setRegStep] = useState<1 | 2>(1);
   const [otp, setOtp] = useState("");
   const [otpUserId, setOtpUserId] = useState<string | null>(null);
@@ -69,7 +69,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [otpSending, setOtpSending] = useState(false);
 
-  // timing
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [expiresLeft, setExpiresLeft] = useState(0);
   const [lastOtpSentAt, setLastOtpSentAt] = useState<Date | null>(null);
@@ -106,11 +105,9 @@ export default function LoginPage() {
     setErrors({});
   }
 
-  async function goNext() {
-    router.replace(nextUrl || "/");
-    router.refresh();
-  }
-
+ function goNext() {
+  window.location.assign(nextUrl || "/");
+}
   async function getCurrentUser() {
     const {
       data: { user },
@@ -146,7 +143,7 @@ export default function LoginPage() {
     setOtpSending(true);
 
     try {
-      const r = await fetch("http://127.0.0.1:8000/otp/send", {
+      const r = await fetch(`${API_BASE_URL}/otp/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, email: email.trim() }),
@@ -170,10 +167,7 @@ export default function LoginPage() {
       setCooldownLeft(cooldownSeconds);
 
       if (expiresAt) {
-        const sec = Math.max(
-          0,
-          Math.floor((expiresAt.getTime() - Date.now()) / 1000)
-        );
+        const sec = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
         setExpiresLeft(sec);
       } else {
         setExpiresLeft(10 * 60);
@@ -288,22 +282,6 @@ export default function LoginPage() {
         return;
       }
 
-      const { error: profileError } = await supabase.from("profiles").upsert(
-        {
-          id: userId,
-          full_name: fullName.trim(),
-          is_verified: false,
-        },
-        { onConflict: "id" }
-      );
-
-      if (profileError) {
-        setErrors({
-          form: `Your account was created, but profile setup failed: ${profileError.message}`,
-        });
-        return;
-      }
-
       setOtpUserId(userId);
       setRegEmail(email);
       setRegStep(2);
@@ -313,7 +291,7 @@ export default function LoginPage() {
       setLastOtpSentAt(null);
 
       setMsg(
-        "Your account has been created. Please request a verification code to activate your account."
+        "Your account has been created successfully. Please request a verification code to activate your account."
       );
     } catch (err: any) {
       setErrors({ form: err?.message ?? "Something went wrong during registration." });
@@ -346,7 +324,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const r = await fetch("http://127.0.0.1:8000/otp/verify", {
+      const r = await fetch(`${API_BASE_URL}/otp/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -414,37 +392,18 @@ export default function LoginPage() {
   }, [expiresLeft, lastOtpSentAt]);
 
   return (
-    <main style={{ minHeight: "100vh", background: "#f5f7fb" }}>
-      <div style={{ maxWidth: 460, margin: "0 auto", padding: "48px 16px" }}>
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #e6e8ef",
-            borderRadius: 12,
-            boxShadow: "0 6px 18px rgba(20, 20, 43, 0.06)",
-            padding: 24,
-          }}
-        >
-          <div style={{ marginBottom: 16 }}>
-            <h1 style={{ margin: 0, fontSize: 24, color: "#111827" }}>CivicAI</h1>
-            <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 14 }}>
-              Sign in or create an account to continue.
-            </p>
-            <p style={{ margin: "10px 0 0", color: "#6b7280", fontSize: 12 }}>
+    <main className={styles.page}>
+      <div className={styles.wrapper}>
+        <div className={styles.card}>
+          <div className={styles.header}>
+            <h1 className={styles.title}>CivicAI</h1>
+            <p className={styles.subtitle}>Sign in or create an account to continue.</p>
+            <p className={styles.redirectText}>
               After authentication, you will be redirected to: <b>{nextUrl}</b>
             </p>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              background: "#f3f4f6",
-              borderRadius: 10,
-              padding: 4,
-              marginBottom: 18,
-              gap: 4,
-            }}
-          >
+          <div className={styles.tabs}>
             <button
               type="button"
               onClick={() => {
@@ -454,7 +413,7 @@ export default function LoginPage() {
                 clearMessages();
               }}
               disabled={loading || otpSending}
-              style={tabStyle(mode === "login")}
+              className={`${styles.tabButton} ${mode === "login" ? styles.tabActive : ""}`}
             >
               Sign in
             </button>
@@ -468,7 +427,7 @@ export default function LoginPage() {
                 clearMessages();
               }}
               disabled={loading || otpSending}
-              style={tabStyle(mode === "register")}
+              className={`${styles.tabButton} ${mode === "register" ? styles.tabActive : ""}`}
             >
               Register
             </button>
@@ -487,7 +446,7 @@ export default function LoginPage() {
                 disabled={loading}
               />
 
-              <div style={{ height: 12 }} />
+              <div className={styles.spacer12} />
 
               <Label text="Password" />
               <Input
@@ -498,12 +457,9 @@ export default function LoginPage() {
                 disabled={loading}
               />
 
-              <div style={{ height: 18 }} />
+              <div className={styles.spacer18} />
 
-              <PrimaryButton
-                disabled={loading}
-                text={loading ? "Signing in..." : "Sign in"}
-              />
+              <PrimaryButton disabled={loading} text={loading ? "Signing in..." : "Sign in"} />
             </form>
           ) : (
             <>
@@ -519,7 +475,7 @@ export default function LoginPage() {
                   />
                   {errors.fullName && <FieldError text={errors.fullName} />}
 
-                  <div style={{ height: 12 }} />
+                  <div className={styles.spacer12} />
 
                   <Label text="Email address" />
                   <Input
@@ -531,7 +487,7 @@ export default function LoginPage() {
                   />
                   {errors.email && <FieldError text={errors.email} />}
 
-                  <div style={{ height: 12 }} />
+                  <div className={styles.spacer12} />
 
                   <Label text="Password" />
                   <Input
@@ -544,7 +500,7 @@ export default function LoginPage() {
                   />
                   {errors.password && <FieldError text={errors.password} />}
 
-                  <div style={{ height: 12 }} />
+                  <div className={styles.spacer12} />
 
                   <Label text="Confirm password" />
                   <Input
@@ -557,7 +513,7 @@ export default function LoginPage() {
                   />
                   {errors.confirmPassword && <FieldError text={errors.confirmPassword} />}
 
-                  <div style={{ height: 18 }} />
+                  <div className={styles.spacer18} />
 
                   <PrimaryButton
                     disabled={loading}
@@ -576,32 +532,18 @@ export default function LoginPage() {
                   />
                   {errors.otp && <FieldError text={errors.otp} />}
 
-                  <div
-                    style={{
-                      marginTop: 10,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      background: "#f9fafb",
-                      border: "1px solid #e5e7eb",
-                    }}
-                  >
-                    <div style={{ fontSize: 13, color: "#111827", fontWeight: 600 }}>
-                      Verification status
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 13, color: "#4b5563" }}>
-                      {otpStatusText}
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 13, color: "#4b5563" }}>
-                      {otpExpiryText}
-                    </div>
+                  <div className={styles.statusBox}>
+                    <div className={styles.statusTitle}>Verification status</div>
+                    <div className={styles.statusText}>{otpStatusText}</div>
+                    <div className={styles.statusText}>{otpExpiryText}</div>
                     {lastOtpSentAt && (
-                      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                      <div className={styles.statusSubtext}>
                         Last code sent: {formatDateTime(lastOtpSentAt)}
                       </div>
                     )}
                   </div>
 
-                  <div style={{ height: 12 }} />
+                  <div className={styles.spacer12} />
 
                   <button
                     type="button"
@@ -609,23 +551,7 @@ export default function LoginPage() {
                     onClick={() => {
                       if (otpUserId && regEmail) sendOtpNow(otpUserId, regEmail);
                     }}
-                    style={{
-                      width: "100%",
-                      padding: "11px 12px",
-                      borderRadius: 10,
-                      border: "1px solid #d1d5db",
-                      background:
-                        loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail
-                          ? "#f3f4f6"
-                          : "#ffffff",
-                      color: "#111827",
-                      fontSize: 14,
-                      fontWeight: 700,
-                      cursor:
-                        loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail
-                          ? "not-allowed"
-                          : "pointer",
-                    }}
+                    className={styles.secondaryButton}
                   >
                     {otpSending
                       ? "Sending code..."
@@ -634,7 +560,7 @@ export default function LoginPage() {
                       : "Send verification code"}
                   </button>
 
-                  <div style={{ height: 12 }} />
+                  <div className={styles.spacer12} />
 
                   <PrimaryButton
                     disabled={loading}
@@ -649,18 +575,7 @@ export default function LoginPage() {
                       clearMessages();
                     }}
                     disabled={loading || otpSending}
-                    style={{
-                      width: "100%",
-                      marginTop: 10,
-                      padding: "11px 12px",
-                      borderRadius: 10,
-                      border: "1px solid #d1d5db",
-                      background: "#ffffff",
-                      color: "#111827",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
+                    className={styles.backButton}
                   >
                     Back
                   </button>
@@ -674,19 +589,6 @@ export default function LoginPage() {
   );
 }
 
-function tabStyle(active: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    border: "none",
-    borderRadius: 8,
-    padding: "10px 12px",
-    cursor: "pointer",
-    background: active ? "#ffffff" : "transparent",
-    color: "#111827",
-    fontWeight: 600,
-  };
-}
-
 function InlineAlert({
   text,
   variant = "info",
@@ -694,35 +596,20 @@ function InlineAlert({
   text: string;
   variant?: "info" | "error";
 }) {
-  const isError = variant === "error";
+  const className =
+    variant === "error"
+      ? `${styles.alert} ${styles.alertError}`
+      : `${styles.alert} ${styles.alertInfo}`;
 
-  return (
-    <div
-      style={{
-        marginBottom: 12,
-        padding: "10px 12px",
-        borderRadius: 10,
-        background: isError ? "#fef2f2" : "#f9fafb",
-        border: isError ? "1px solid #fecaca" : "1px solid #e5e7eb",
-        color: isError ? "#991b1b" : "#111827",
-        fontSize: 14,
-      }}
-    >
-      {text}
-    </div>
-  );
+  return <div className={className}>{text}</div>;
 }
 
 function FieldError({ text }: { text: string }) {
-  return <div style={{ marginTop: 6, fontSize: 12, color: "#b91c1c" }}>{text}</div>;
+  return <div className={styles.fieldError}>{text}</div>;
 }
 
 function Label({ text }: { text: string }) {
-  return (
-    <div style={{ marginBottom: 6, fontSize: 13, color: "#374151", fontWeight: 600 }}>
-      {text}
-    </div>
-  );
+  return <div className={styles.label}>{text}</div>;
 }
 
 function Input({
@@ -747,37 +634,14 @@ function Input({
       placeholder={placeholder}
       type={type}
       disabled={disabled}
-      style={{
-        width: "100%",
-        padding: "10px 12px",
-        borderRadius: 10,
-        border: invalid ? "1px solid #ef4444" : "1px solid #d1d5db",
-        outline: "none",
-        fontSize: 14,
-        background: disabled ? "#f3f4f6" : "#ffffff",
-        color: "#111827",
-      }}
+      className={`${styles.input} ${invalid ? styles.inputInvalid : ""}`}
     />
   );
 }
 
 function PrimaryButton({ text, disabled }: { text: string; disabled?: boolean }) {
   return (
-    <button
-      type="submit"
-      disabled={disabled}
-      style={{
-        width: "100%",
-        padding: "11px 12px",
-        borderRadius: 10,
-        border: "1px solid #2563eb",
-        background: disabled ? "#93c5fd" : "#2563eb",
-        color: "#ffffff",
-        fontSize: 14,
-        fontWeight: 700,
-        cursor: disabled ? "not-allowed" : "pointer",
-      }}
-    >
+    <button type="submit" disabled={disabled} className={styles.primaryButton}>
       {text}
     </button>
   );
