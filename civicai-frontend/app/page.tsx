@@ -3,6 +3,12 @@ import { createClient } from "@/lib/supabaseServer";
 import LogoutButton from "./components/LogoutButton";
 import styles from "./home.module.css";
 
+type ComplaintImageRow = {
+  public_url: string | null;
+  original_filename: string | null;
+  created_at: string;
+};
+
 type ComplaintRow = {
   id: string;
   title: string | null;
@@ -11,14 +17,30 @@ type ComplaintRow = {
   address_label: string | null;
   lat: number | null;
   lng: number | null;
+  complaint_media?: ComplaintImageRow[] | null;
 };
 
 export default async function HomePage() {
   const supabase = await createClient();
 
   const { data: complaints, error } = await supabase
-    .from("v_complaints_dashboard")
-    .select("id, title, status, created_at, address_label, lat, lng")
+    .from("complaints")
+    .select(
+      `
+      id,
+      title,
+      status,
+      created_at,
+      address_label,
+      lat,
+      lng,
+      complaint_media (
+        public_url,
+        original_filename,
+        created_at
+      )
+    `
+    )
     .order("created_at", { ascending: false })
     .limit(6);
 
@@ -150,35 +172,54 @@ export default async function HomePage() {
             </div>
           ) : (
             <div className={styles.complaintList}>
-              {recentComplaints.map((item) => (
-                <article key={item.id} className={styles.complaintCard}>
-                  <div className={styles.complaintTop}>
-                    <div className={styles.complaintMain}>
-                      <h3 className={styles.complaintTitle}>
-                        {item.title?.trim() || "Untitled complaint"}
-                      </h3>
+              {recentComplaints.map((item) => {
+                const imageUrl =
+                  item.complaint_media?.find((media) => !!media.public_url)?.public_url ?? null;
 
-                      <div className={styles.metaRow}>
-                        <span className={styles.metaItem}>
-                          {item.address_label?.trim() || "Location not specified"}
-                        </span>
-                        <span className={styles.metaDot}>•</span>
-                        <span className={styles.metaItem}>
-                          {new Date(item.created_at).toLocaleString()}
-                        </span>
+                return (
+                  <article key={item.id} className={styles.complaintCard}>
+                    <div className={styles.complaintTop}>
+                      <div className={styles.complaintMain}>
+                        <h3 className={styles.complaintTitle}>
+                          {item.title?.trim() || "Untitled complaint"}
+                        </h3>
+
+                        <div className={styles.metaRow}>
+                          <span className={styles.metaItem}>
+                            {item.address_label?.trim() || "Location not specified"}
+                          </span>
+                          <span className={styles.metaDot}>•</span>
+                          <span className={styles.metaItem}>
+                            {new Date(item.created_at).toLocaleString()}
+                          </span>
+                        </div>
                       </div>
 
-                      {(item.lat !== null && item.lng !== null) && (
-                        <p className={styles.coords}>
-                          Coordinates: {item.lat}, {item.lng}
-                        </p>
-                      )}
+                      <StatusBadge label={item.status ?? "unknown"} />
                     </div>
 
-                    <StatusBadge label={item.status ?? "unknown"} />
-                  </div>
-                </article>
-              ))}
+                    <div className={styles.complaintBody}>
+                      {imageUrl ? (
+                        <div className={styles.complaintImageWrap}>
+                          <img
+                            src={imageUrl}
+                            alt={item.title?.trim() || "Complaint image"}
+                            className={styles.complaintImage}
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className={styles.complaintTextCol}>
+                        {(item.lat !== null && item.lng !== null) && (
+                          <p className={styles.coords}>
+                            Coordinates: {item.lat}, {item.lng}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>
@@ -194,6 +235,7 @@ function StatusBadge({ label }: { label: string }) {
   if (value.includes("open")) className = styles.badgeOpen;
   else if (value.includes("progress")) className = styles.badgeProgress;
   else if (value.includes("resolved")) className = styles.badgeResolved;
+  else if (value.includes("submitted")) className = styles.badgeNeutral;
 
   return <span className={`${styles.badge} ${className}`}>{label}</span>;
 }
