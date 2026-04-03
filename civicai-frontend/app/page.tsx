@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabaseServer";
 import LogoutButton from "./components/LogoutButton";
 import styles from "./home.module.css";
-
+import ImageLightbox from "./components/ImageLightbox";
 type ComplaintImageRow = {
   public_url: string | null;
   original_filename: string | null;
@@ -200,20 +200,12 @@ export default async function HomePage() {
 
                     <div className={styles.complaintBody}>
                       {imageUrl ? (
-  <a
-    href={imageUrl}
-    target="_blank"
-    rel="noreferrer"
-    className={styles.complaintImageWrap}
-    aria-label="Open complaint image"
-  >
-    <img
+  <div className={styles.complaintImageWrap}>
+    <ImageLightbox
       src={imageUrl}
       alt={item.title?.trim() || "Complaint image"}
-      className={styles.complaintImage}
     />
-    <span className={styles.imageOverlay}>Click to view full image</span>
-  </a>
+  </div>
 ) : null}
 
                       <div className={styles.complaintTextCol}>
