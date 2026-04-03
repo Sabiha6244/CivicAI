@@ -301,8 +301,35 @@
   color: #9ca3af;
 }
 
+.complaintBody {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.complaintImageWrap {
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.complaintImage {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+}
+
+.complaintTextCol {
+  min-width: 0;
+}
+
 .coords {
-  margin: 10px 0 0;
+  margin: 0;
   color: #6b7280;
   font-size: 0.88rem;
 }
@@ -358,12 +385,17 @@
 
 @media (max-width: 900px) {
   .heroGrid,
-  .featureGrid {
+  .featureGrid,
+  .complaintBody {
     grid-template-columns: 1fr;
   }
 
   .sectionTitle {
     font-size: 1.6rem;
+  }
+
+  .complaintImage {
+    height: 220px;
   }
 }
 
@@ -386,5 +418,9 @@
 
   .complaintTop {
     flex-direction: column;
+  }
+
+  .complaintImage {
+    height: 200px;
   }
 }
