@@ -301,3 +301,64 @@ def otp_verify(body: VerifyOtpReq):
         "message": "Email verification completed successfully.",
         "verified_at": iso(now),
     }
+
+@app.post("/ai/run/{complaint_id}")
+def run_ai_for_complaint(complaint_id: str):
+    require_backend_env()
+
+    complaint = get_complaint_row(complaint_id)
+    media = get_complaint_image_row(complaint_id)
+
+    text_result = run_text_inference(
+        title=complaint.get("title") or "",
+        description=complaint.get("description") or "",
+    )
+
+    image_result = run_image_inference(
+        public_url=media.get("public_url") if media else None
+    )
+
+    fusion_result = fuse_results(text_result, image_result)
+    summary = simple_summary(
+        title=complaint.get("title") or "",
+        description=complaint.get("description") or "",
+        fusion_label=fusion_result["fusion_label"],
+    )
+
+    priority_score, priority = calculate_priority(
+        fusion_label=fusion_result["fusion_label"],
+        text_conf=text_result.get("confidence"),
+        conflict_flag=fusion_result["conflict_flag"],
+    )
+
+    save_payload = {
+        "text_label": text_result.get("label"),
+        "text_confidence": text_result.get("confidence"),
+        "image_labels": image_result.get("labels"),
+        "image_confidences": image_result.get("confidences"),
+        "image_boxes": image_result.get("boxes"),
+        "fusion_label": fusion_result.get("fusion_label"),
+        "fusion_confidence": fusion_result.get("fusion_confidence"),
+        "conflict_flag": fusion_result.get("conflict_flag"),
+        "priority_score": priority_score,
+        "priority": priority,
+        "summary": summary,
+        "model_versions": {
+            "text_model": "roberta_text_best_final",
+            "image_model": "yolo_416_e10_fast2_best",
+        },
+        "updated_at": iso(utc_now()),
+    }
+
+    upsert_inference_result(complaint_id, save_payload)
+
+    return {
+        "ok": True,
+        "complaint_id": complaint_id,
+        "text_result": text_result,
+        "image_result": image_result,
+        "fusion_result": fusion_result,
+        "priority_score": priority_score,
+        "priority": priority,
+        "summary": summary,
+    }

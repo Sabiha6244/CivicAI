@@ -8,6 +8,8 @@ export type DivisionItem = {
   id: string;
   name: string;
   bn_name?: string;
+  lat?: string;
+  long?: string;
 };
 
 export type DistrictItem = {
@@ -15,6 +17,8 @@ export type DistrictItem = {
   division_id: string;
   name: string;
   bn_name?: string;
+  lat?: string;
+  long?: string;
 };
 
 export type UpazilaItem = {
@@ -22,6 +26,8 @@ export type UpazilaItem = {
   district_id: string;
   name: string;
   bn_name?: string;
+  lat?: string;
+  long?: string;
 };
 
 export type DhakaCityItem = {
@@ -30,6 +36,8 @@ export type DhakaCityItem = {
   city_corporation: string;
   name: string;
   bn_name?: string;
+  lat?: string;
+  long?: string;
 };
 
 export type PostcodeItem = {
@@ -65,3 +73,9 @@ export const districts = (districtsRaw as DistrictsFile).districts ?? [];
 export const upazilas = (upazilasRaw as UpazilasFile).upazilas ?? [];
 export const dhakaCityAreas = (dhakaCityRaw as DhakaCityFile).dhaka ?? [];
 export const postcodes = (postcodesRaw as PostcodesFile).postcodes ?? [];
+
+export function parseCoordinate(value?: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
