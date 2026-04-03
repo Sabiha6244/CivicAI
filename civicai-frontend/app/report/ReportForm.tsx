@@ -346,136 +346,154 @@ export default function ReportForm({ userId }: { userId: string }) {
             </div>
 
             <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Address information</h3>
+              <h3 className={styles.sectionTitle}>Location and map</h3>
 
-              <div className={styles.gridTwo}>
-                <div className={styles.inputGroup}>
-                  <label className={styles.label}>Division</label>
-                  <select
-                    value={division}
-                    onChange={(e) => {
-                      setDivision(e.target.value);
-                      setDistrict("");
-                      setUpazila("");
-                      setCityArea("");
-                      setLat(null);
-                      setLng(null);
-                    }}
-                    className={styles.input}
-                    disabled={loading}
-                  >
-                    <option value="">Select division</option>
-                    {divisions.map((item) => (
-                      <option key={item.id} value={item.name}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className={styles.inputGroup}>
-                  <label className={styles.label}>District</label>
-                  <select
-                    value={district}
-                    onChange={(e) => {
-                      setDistrict(e.target.value);
-                      setUpazila("");
-                      setCityArea("");
-                      setLat(null);
-                      setLng(null);
-                    }}
-                    className={styles.input}
-                    disabled={loading || !division}
-                  >
-                    <option value="">Select district</option>
-                    {availableDistricts.map((item) => (
-                      <option key={item.id} value={item.name}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className={styles.inputGroup}>
-                  <label className={styles.label}>
-                    Upazila {isDhakaDistrict ? "(choose this or Dhaka city area)" : ""}
-                  </label>
-                  <select
-                    value={upazila}
-                    onChange={(e) => {
-                      setUpazila(e.target.value);
-                      setLat(null);
-                      setLng(null);
-                      if (isDhakaDistrict && e.target.value) {
-                        setCityArea("");
-                      }
-                    }}
-                    className={styles.input}
-                    disabled={loading || !district || (isDhakaDistrict && !!cityArea)}
-                  >
-                    <option value="">Select upazila</option>
-                    {availableUpazilas.map((item) => (
-                      <option key={item.id} value={item.name}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {isDhakaDistrict && (
-                  <div className={styles.inputGroup}>
-                    <label className={styles.label}>Dhaka city area</label>
-                    <select
-                      value={cityArea}
-                      onChange={(e) => {
-                        setCityArea(e.target.value);
-                        setLat(null);
-                        setLng(null);
-                        if (e.target.value) {
-                          setUpazila("");
-                        }
-                      }}
-                      className={styles.input}
-                      disabled={loading || !!upazila}
-                    >
-                      <option value="">Select city area</option>
-                      {availableDhakaCityAreas.map((item, index) => (
-                        <option
-                          key={`${item.city_corporation}-${item.name}-${index}`}
-                          value={item.name}
-                        >
-                          {item.name} ({item.city_corporation})
-                        </option>
-                      ))}
-                    </select>
+              <div className={styles.locationWorkspace}>
+                <div className={styles.locationControls}>
+                  <div className={styles.locationIntro}>
+                    <p className={styles.locationTitle}>Select the complaint area</p>
+                    <p className={styles.locationText}>
+                      Choose the division and district first. The map on the right will move
+                      automatically so the exact complaint point can be marked more easily.
+                    </p>
                   </div>
-                )}
-              </div>
 
-              <div className={styles.inputGroup}>
-                <label className={styles.label}>Location details</label>
-                <textarea
-                  value={locationDetails}
-                  onChange={(e) => setLocationDetails(e.target.value)}
-                  placeholder="Road name, village, market, nearby landmark, ward number, building name, or any details that help identify the place."
-                  className={`${styles.input} ${styles.textarea}`}
-                  disabled={loading}
-                />
-              </div>
-            </div>
+                  <div className={styles.gridTwo}>
+                    <div className={styles.inputGroup}>
+                      <label className={styles.label}>Division</label>
+                      <select
+                        value={division}
+                        onChange={(e) => {
+                          setDivision(e.target.value);
+                          setDistrict("");
+                          setUpazila("");
+                          setCityArea("");
+                          setLat(null);
+                          setLng(null);
+                        }}
+                        className={styles.input}
+                        disabled={loading}
+                      >
+                        <option value="">Select division</option>
+                        {divisions.map((item) => (
+                          <option key={item.id} value={item.name}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Map location</h3>
-              <div className={styles.mapShell}>
-                <LocationPicker
-                  lat={lat}
-                  lng={lng}
-                  areaCenter={selectedAreaCenter}
-                  onChange={(newLat, newLng) => {
-                    setLat(newLat);
-                    setLng(newLng);
-                  }}
-                />
+                    <div className={styles.inputGroup}>
+                      <label className={styles.label}>District</label>
+                      <select
+                        value={district}
+                        onChange={(e) => {
+                          setDistrict(e.target.value);
+                          setUpazila("");
+                          setCityArea("");
+                          setLat(null);
+                          setLng(null);
+                        }}
+                        className={styles.input}
+                        disabled={loading || !division}
+                      >
+                        <option value="">Select district</option>
+                        {availableDistricts.map((item) => (
+                          <option key={item.id} value={item.name}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className={styles.inputGroup}>
+                      <label className={styles.label}>
+                        Upazila {isDhakaDistrict ? "(choose this or Dhaka city area)" : ""}
+                      </label>
+                      <select
+                        value={upazila}
+                        onChange={(e) => {
+                          setUpazila(e.target.value);
+                          setLat(null);
+                          setLng(null);
+                          if (isDhakaDistrict && e.target.value) {
+                            setCityArea("");
+                          }
+                        }}
+                        className={styles.input}
+                        disabled={loading || !district || (isDhakaDistrict && !!cityArea)}
+                      >
+                        <option value="">Select upazila</option>
+                        {availableUpazilas.map((item) => (
+                          <option key={item.id} value={item.name}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {isDhakaDistrict && (
+                      <div className={styles.inputGroup}>
+                        <label className={styles.label}>Dhaka city area</label>
+                        <select
+                          value={cityArea}
+                          onChange={(e) => {
+                            setCityArea(e.target.value);
+                            setLat(null);
+                            setLng(null);
+                            if (e.target.value) {
+                              setUpazila("");
+                            }
+                          }}
+                          className={styles.input}
+                          disabled={loading || !!upazila}
+                        >
+                          <option value="">Select city area</option>
+                          {availableDhakaCityAreas.map((item, index) => (
+                            <option
+                              key={`${item.city_corporation}-${item.name}-${index}`}
+                              value={item.name}
+                            >
+                              {item.name} ({item.city_corporation})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={styles.inputGroup}>
+                    <label className={styles.label}>Location details</label>
+                    <textarea
+                      value={locationDetails}
+                      onChange={(e) => setLocationDetails(e.target.value)}
+                      placeholder="Road name, village, market, nearby landmark, ward number, building name, or any details that help identify the place."
+                      className={`${styles.input} ${styles.textarea}`}
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+
+                <div className={styles.mapPanel}>
+                  <div className={styles.mapPanelHeader}>
+                    <p className={styles.mapPanelTitle}>Live location preview</p>
+                    <p className={styles.mapPanelText}>
+                      After choosing the area, click the exact point on the map.
+                    </p>
+                  </div>
+
+                  <div className={styles.mapShell}>
+                    <LocationPicker
+                      lat={lat}
+                      lng={lng}
+                      areaCenter={selectedAreaCenter}
+                      onChange={(newLat, newLng) => {
+                        setLat(newLat);
+                        setLng(newLng);
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
