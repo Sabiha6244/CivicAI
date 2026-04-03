@@ -200,14 +200,21 @@ export default async function HomePage() {
 
                     <div className={styles.complaintBody}>
                       {imageUrl ? (
-                        <div className={styles.complaintImageWrap}>
-                          <img
-                            src={imageUrl}
-                            alt={item.title?.trim() || "Complaint image"}
-                            className={styles.complaintImage}
-                          />
-                        </div>
-                      ) : null}
+  <a
+    href={imageUrl}
+    target="_blank"
+    rel="noreferrer"
+    className={styles.complaintImageWrap}
+    aria-label="Open complaint image"
+  >
+    <img
+      src={imageUrl}
+      alt={item.title?.trim() || "Complaint image"}
+      className={styles.complaintImage}
+    />
+    <span className={styles.imageOverlay}>Click to view full image</span>
+  </a>
+) : null}
 
                       <div className={styles.complaintTextCol}>
                         {(item.lat !== null && item.lng !== null) && (
