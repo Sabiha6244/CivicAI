@@ -5,13 +5,25 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./report.module.css";
-import { divisions, districts, upazilas, dhakaCityAreas } from "./bdAddress";
+import {
+  divisions,
+  districts,
+  upazilas,
+  dhakaCityAreas,
+  parseCoordinate,
+} from "./bdAddress";
 
 const LocationPicker = dynamic(() => import("./LocationPicker"), {
   ssr: false,
 });
 
 type MessageType = "info" | "error";
+
+type AreaCenter = {
+  lat: number;
+  lng: number;
+  zoom?: number;
+} | null;
 
 const MAX_IMAGE_SIZE_MB = 8;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
@@ -64,6 +76,39 @@ export default function ReportForm({ userId }: { userId: string }) {
     if (!selectedDistrict) return [];
     return dhakaCityAreas.filter((item) => item.district_id === selectedDistrict.id);
   }, [district, isDhakaDistrict]);
+
+  const selectedAreaCenter = useMemo<AreaCenter>(() => {
+    const selectedDistrict = districts.find((item) => item.name === district);
+    const selectedDivision = divisions.find((item) => item.name === division);
+
+    if (selectedDistrict) {
+      const districtLat = parseCoordinate(selectedDistrict.lat);
+      const districtLng = parseCoordinate(selectedDistrict.long);
+
+      if (districtLat !== null && districtLng !== null) {
+        return {
+          lat: districtLat,
+          lng: districtLng,
+          zoom: isDhakaDistrict ? 11 : 10,
+        };
+      }
+    }
+
+    if (selectedDivision) {
+      const divisionLat = parseCoordinate(selectedDivision.lat);
+      const divisionLng = parseCoordinate(selectedDivision.long);
+
+      if (divisionLat !== null && divisionLng !== null) {
+        return {
+          lat: divisionLat,
+          lng: divisionLng,
+          zoom: 8,
+        };
+      }
+    }
+
+    return null;
+  }, [division, district, isDhakaDistrict]);
 
   function resetForm() {
     setReporterName("");
@@ -149,6 +194,17 @@ export default function ReportForm({ userId }: { userId: string }) {
     return { ok: true as const };
   }
 
+  async function triggerAiInference(complaintId: string) {
+    try {
+      await fetch(`http://127.0.0.1:8000/ai/run/${complaintId}`, {
+        method: "POST",
+        keepalive: true,
+      });
+    } catch {
+      // Ignore background AI request errors during redirect/navigation
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -220,18 +276,20 @@ export default function ReportForm({ userId }: { userId: string }) {
     const complaintId = complaintInsert.data.id;
     const imageResult = await uploadComplaintImage(complaintId);
 
-    setLoading(false);
-
     if (!imageResult.ok) {
+      setLoading(false);
       setMsgType("error");
       setMsg(imageResult.error);
       return;
     }
 
+    triggerAiInference(complaintId);
+
+    setLoading(false);
     resetForm();
     setMsgType("info");
     setMsg("Your complaint has been submitted successfully. Redirecting...");
-    setTimeout(() => router.replace("/"), 1200);
+    setTimeout(() => router.replace("/"), 2000);
   }
 
   return (
@@ -300,6 +358,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                       setDistrict("");
                       setUpazila("");
                       setCityArea("");
+                      setLat(null);
+                      setLng(null);
                     }}
                     className={styles.input}
                     disabled={loading}
@@ -321,6 +381,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                       setDistrict(e.target.value);
                       setUpazila("");
                       setCityArea("");
+                      setLat(null);
+                      setLng(null);
                     }}
                     className={styles.input}
                     disabled={loading || !division}
@@ -342,6 +404,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                     value={upazila}
                     onChange={(e) => {
                       setUpazila(e.target.value);
+                      setLat(null);
+                      setLng(null);
                       if (isDhakaDistrict && e.target.value) {
                         setCityArea("");
                       }
@@ -365,6 +429,8 @@ export default function ReportForm({ userId }: { userId: string }) {
                       value={cityArea}
                       onChange={(e) => {
                         setCityArea(e.target.value);
+                        setLat(null);
+                        setLng(null);
                         if (e.target.value) {
                           setUpazila("");
                         }
@@ -404,6 +470,7 @@ export default function ReportForm({ userId }: { userId: string }) {
                 <LocationPicker
                   lat={lat}
                   lng={lng}
+                  areaCenter={selectedAreaCenter}
                   onChange={(newLat, newLng) => {
                     setLat(newLat);
                     setLng(newLng);

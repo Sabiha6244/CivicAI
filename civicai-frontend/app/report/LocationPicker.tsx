@@ -9,11 +9,16 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import { icon, type LatLngTuple } from "leaflet";
-import "leaflet/dist/leaflet.css";
+
 
 type LocationPickerProps = {
   lat: number | null;
   lng: number | null;
+  areaCenter?: {
+    lat: number;
+    lng: number;
+    zoom?: number;
+  } | null;
   onChange: (lat: number, lng: number) => void;
 };
 
@@ -39,7 +44,7 @@ function ClickHandler({
   return null;
 }
 
-function MapMover({
+function SelectedPointMover({
   lat,
   lng,
 }: {
@@ -58,9 +63,34 @@ function MapMover({
   return null;
 }
 
+function AreaCenterMover({
+  areaCenter,
+  lat,
+  lng,
+}: {
+  areaCenter?: { lat: number; lng: number; zoom?: number } | null;
+  lat: number | null;
+  lng: number | null;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    // Only auto-move to selected division/district center
+    // when exact complaint point has not been selected yet.
+    if (lat === null && lng === null && areaCenter) {
+      map.flyTo([areaCenter.lat, areaCenter.lng], areaCenter.zoom ?? 11, {
+        duration: 0.8,
+      });
+    }
+  }, [areaCenter, lat, lng, map]);
+
+  return null;
+}
+
 export default function LocationPicker({
   lat,
   lng,
+  areaCenter,
   onChange,
 }: LocationPickerProps) {
   const [locating, setLocating] = useState(false);
@@ -69,8 +99,15 @@ export default function LocationPicker({
 
   const defaultCenter = useMemo<LatLngTuple>(() => {
     if (lat !== null && lng !== null) return [lat, lng];
+    if (areaCenter) return [areaCenter.lat, areaCenter.lng];
     return [23.685, 90.3563];
-  }, [lat, lng]);
+  }, [lat, lng, areaCenter]);
+
+  const defaultZoom = useMemo(() => {
+    if (lat !== null && lng !== null) return 16;
+    if (areaCenter?.zoom) return areaCenter.zoom;
+    return 7;
+  }, [lat, lng, areaCenter]);
 
   function handleManualSelection(newLat: number, newLng: number) {
     setLocationError(null);
@@ -135,7 +172,7 @@ export default function LocationPicker({
 
   const locationHelp =
     lat === null || lng === null
-      ? "Choose your current location or click on the map to mark where the problem is."
+      ? "After selecting division and district, the map will move to that area. Then click the exact complaint location on the map."
       : selectionMode === "current"
       ? "If the problem is somewhere else, choose 'Mark another location on map' and click the correct place."
       : "If this is not the correct place, click another point on the map.";
@@ -221,7 +258,7 @@ export default function LocationPicker({
 
       <MapContainer
         center={defaultCenter}
-        zoom={lat !== null && lng !== null ? 16 : 7}
+        zoom={defaultZoom}
         scrollWheelZoom={true}
         style={{
           height: "360px",
@@ -236,7 +273,8 @@ export default function LocationPicker({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <ClickHandler onSelectManualLocation={handleManualSelection} />
-        <MapMover lat={lat} lng={lng} />
+        <AreaCenterMover areaCenter={areaCenter} lat={lat} lng={lng} />
+        <SelectedPointMover lat={lat} lng={lng} />
         {markerPosition ? <Marker position={markerPosition} icon={markerIcon} /> : null}
       </MapContainer>
 

@@ -1,0 +1,3 @@
+civicai-backend/models/
+civicai-backend/__pycache__/
+*.pyc
