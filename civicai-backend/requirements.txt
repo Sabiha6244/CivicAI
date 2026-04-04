@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+pydantic
+email-validator
+pillow
+numpy
+torch
+transformers
+safetensors
+tokenizers
+ultralytics
