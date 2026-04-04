@@ -14,17 +14,22 @@ type ComplaintRow = {
   address_label: string | null;
   status: string;
   created_at: string;
-  complaint_media: {
-    public_url: string | null;
-  }[] | null;
-  inference_results: {
-    fusion_label: string | null;
-    fusion_confidence: number | null;
-    priority: string | null;
-    priority_score: number | null;
-    conflict_flag: boolean;
-    summary: string | null;
-  }[] | null;
+};
+
+type ComplaintMediaRow = {
+  complaint_id: string;
+  public_url: string | null;
+  created_at: string;
+};
+
+type InferenceRow = {
+  complaint_id: string;
+  fusion_label: string | null;
+  fusion_confidence: number | null;
+  priority: string | null;
+  priority_score: number | null;
+  conflict_flag: boolean | null;
+  summary: string | null;
 };
 
 function formatDate(value: string) {
@@ -114,7 +119,7 @@ export default async function AuthorityPage() {
     redirect("/");
   }
 
-  const { data, error } = await supabase
+  const { data: complaintsData, error: complaintsError } = await supabase
     .from("complaints")
     .select(`
       id,
@@ -126,22 +131,11 @@ export default async function AuthorityPage() {
       city_area,
       address_label,
       status,
-      created_at,
-      complaint_media (
-        public_url
-      ),
-      inference_results (
-        fusion_label,
-        fusion_confidence,
-        priority,
-        priority_score,
-        conflict_flag,
-        summary
-      )
+      created_at
     `)
     .order("created_at", { ascending: false });
 
-  if (error) {
+  if (complaintsError) {
     return (
       <main style={{ padding: "32px", maxWidth: 1200, margin: "0 auto" }}>
         <h1 style={{ fontSize: "2rem", fontWeight: 800, marginBottom: 12 }}>
@@ -156,13 +150,49 @@ export default async function AuthorityPage() {
             color: "#991b1b",
           }}
         >
-          Failed to load complaints: {error.message}
+          Failed to load complaints: {complaintsError.message}
         </div>
       </main>
     );
   }
 
-  const complaints = (data ?? []) as ComplaintRow[];
+  const complaints = (complaintsData ?? []) as ComplaintRow[];
+  const complaintIds = complaints.map((item) => item.id);
+
+  let mediaByComplaint = new Map<string, ComplaintMediaRow>();
+  let inferenceByComplaint = new Map<string, InferenceRow>();
+
+  if (complaintIds.length > 0) {
+    const { data: mediaRows } = await supabase
+      .from("complaint_media")
+      .select("complaint_id, public_url, created_at")
+      .in("complaint_id", complaintIds)
+      .eq("media_type", "image")
+      .order("created_at", { ascending: true });
+
+    const { data: inferenceRows } = await supabase
+      .from("inference_results")
+      .select(`
+        complaint_id,
+        fusion_label,
+        fusion_confidence,
+        priority,
+        priority_score,
+        conflict_flag,
+        summary
+      `)
+      .in("complaint_id", complaintIds);
+
+    for (const row of (mediaRows ?? []) as ComplaintMediaRow[]) {
+      if (!mediaByComplaint.has(row.complaint_id)) {
+        mediaByComplaint.set(row.complaint_id, row);
+      }
+    }
+
+    for (const row of (inferenceRows ?? []) as InferenceRow[]) {
+      inferenceByComplaint.set(row.complaint_id, row);
+    }
+  }
 
   return (
     <main
@@ -221,12 +251,7 @@ export default async function AuthorityPage() {
             padding: 24,
           }}
         >
-          <div
-            style={{
-              display: "grid",
-              gap: 18,
-            }}
-          >
+          <div style={{ display: "grid", gap: 18 }}>
             {complaints.length === 0 ? (
               <div
                 style={{
@@ -241,8 +266,8 @@ export default async function AuthorityPage() {
               </div>
             ) : (
               complaints.map((complaint) => {
-                const media = complaint.complaint_media?.[0];
-                const ai = complaint.inference_results?.[0];
+                const media = mediaByComplaint.get(complaint.id);
+                const ai = inferenceByComplaint.get(complaint.id);
                 const area =
                   complaint.city_area || complaint.upazila || complaint.district || "Unknown";
                 const statusChip = badgeStyle(complaint.status);
