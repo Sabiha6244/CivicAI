@@ -11,6 +11,8 @@ import {
   upazilas,
   dhakaCityAreas,
   parseCoordinate,
+  getUpazilaCenterByName,
+  getDhakaAreaCenterByName,
 } from "./bdAddress";
 
 const LocationPicker = dynamic(() => import("./LocationPicker"), {
@@ -81,6 +83,28 @@ export default function ReportForm({ userId }: { userId: string }) {
     const selectedDistrict = districts.find((item) => item.name === district);
     const selectedDivision = divisions.find((item) => item.name === division);
 
+    if (isDhakaDistrict && cityArea && selectedDistrict) {
+      const dhakaAreaCenter = getDhakaAreaCenterByName(cityArea, selectedDistrict.id);
+      if (dhakaAreaCenter) {
+        return {
+          lat: dhakaAreaCenter.lat,
+          lng: dhakaAreaCenter.lng,
+          zoom: dhakaAreaCenter.zoom ?? 13,
+        };
+      }
+    }
+
+    if (upazila && selectedDistrict) {
+      const upazilaCenter = getUpazilaCenterByName(upazila, selectedDistrict.id);
+      if (upazilaCenter) {
+        return {
+          lat: upazilaCenter.lat,
+          lng: upazilaCenter.lng,
+          zoom: upazilaCenter.zoom ?? 12,
+        };
+      }
+    }
+
     if (selectedDistrict) {
       const districtLat = parseCoordinate(selectedDistrict.lat);
       const districtLng = parseCoordinate(selectedDistrict.long);
@@ -108,7 +132,7 @@ export default function ReportForm({ userId }: { userId: string }) {
     }
 
     return null;
-  }, [division, district, isDhakaDistrict]);
+  }, [division, district, upazila, cityArea, isDhakaDistrict]);
 
   function resetForm() {
     setReporterName("");
@@ -353,8 +377,9 @@ export default function ReportForm({ userId }: { userId: string }) {
                   <div className={styles.locationIntro}>
                     <p className={styles.locationTitle}>Select the complaint area</p>
                     <p className={styles.locationText}>
-                      Choose the division and district first. The map on the right will move
-                      automatically so the exact complaint point can be marked more easily.
+                      Choose the division, district, and upazila or Dhaka city area first.
+                      The map on the right will move automatically so the exact complaint
+                      point can be marked more easily.
                     </p>
                   </div>
 
