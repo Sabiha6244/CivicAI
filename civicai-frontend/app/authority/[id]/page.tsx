@@ -21,26 +21,33 @@ type ComplaintDetail = {
   resolution_note: string | null;
   resolved_at: string | null;
   created_at: string;
-  complaint_media: {
-    public_url: string | null;
-    original_filename: string | null;
-  }[] | null;
-  inference_results: {
-    text_label: string | null;
-    text_confidence: number | null;
-    image_labels: string[] | null;
-    image_confidences: number[] | null;
-    image_boxes: number[][] | null;
-    fusion_label: string | null;
-    fusion_confidence: number | null;
-    conflict_flag: boolean;
-    priority: string | null;
-    priority_score: number | null;
-    summary: string | null;
-    model_versions: Record<string, string> | null;
-    created_at: string;
-    updated_at: string;
-  }[] | null;
+};
+
+type ComplaintMediaRow = {
+  complaint_id: string;
+  public_url: string | null;
+  original_filename: string | null;
+  created_at: string;
+};
+
+type InferenceRow = {
+  complaint_id: string;
+  text_label: string | null;
+  text_confidence: number | null;
+  image_labels: string[] | null;
+  image_confidences: number[] | null;
+  image_boxes: number[][] | null;
+  fusion_label: string | null;
+  fusion_confidence: number | null;
+  conflict_flag: boolean | null;
+  priority: string | null;
+  priority_score: number | null;
+  summary: string | null;
+  model_versions: Record<string, string> | null;
+  detected_image_url: string | null;
+  detected_image_path: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 function formatDate(value: string) {
@@ -169,7 +176,7 @@ export default async function AuthorityComplaintDetailPage({
     redirect("/");
   }
 
-  const { data, error } = await supabase
+  const { data: complaintData, error } = await supabase
     .from("complaints")
     .select(`
       id,
@@ -187,38 +194,51 @@ export default async function AuthorityComplaintDetailPage({
       status,
       resolution_note,
       resolved_at,
-      created_at,
-      complaint_media (
-        public_url,
-        original_filename
-      ),
-      inference_results (
-        text_label,
-        text_confidence,
-        image_labels,
-        image_confidences,
-        image_boxes,
-        fusion_label,
-        fusion_confidence,
-        conflict_flag,
-        priority,
-        priority_score,
-        summary,
-        model_versions,
-        created_at,
-        updated_at
-      )
+      created_at
     `)
     .eq("id", id)
     .single();
 
-  if (error) {
+  if (error || !complaintData) {
     notFound();
   }
 
-  const complaint = data as ComplaintDetail;
-  const media = complaint.complaint_media?.[0] ?? null;
-  const ai = complaint.inference_results?.[0] ?? null;
+  const complaint = complaintData as ComplaintDetail;
+
+  const { data: mediaRows } = await supabase
+    .from("complaint_media")
+    .select("complaint_id, public_url, original_filename, created_at")
+    .eq("complaint_id", id)
+    .eq("media_type", "image")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  const { data: inferenceRow } = await supabase
+    .from("inference_results")
+    .select(`
+      complaint_id,
+      text_label,
+      text_confidence,
+      image_labels,
+      image_confidences,
+      image_boxes,
+      fusion_label,
+      fusion_confidence,
+      conflict_flag,
+      priority,
+      priority_score,
+      summary,
+      model_versions,
+      detected_image_url,
+      detected_image_path,
+      created_at,
+      updated_at
+    `)
+    .eq("complaint_id", id)
+    .maybeSingle();
+
+  const media = ((mediaRows ?? [])[0] ?? null) as ComplaintMediaRow | null;
+  const ai = (inferenceRow ?? null) as InferenceRow | null;
   const statusStyles = statusChip(complaint.status);
   const priorityStyles = priorityChip(ai?.priority);
 
@@ -329,12 +349,7 @@ export default async function AuthorityComplaintDetailPage({
             gap: 22,
           }}
         >
-          <section
-            style={{
-              display: "grid",
-              gap: 22,
-            }}
-          >
+          <section style={{ display: "grid", gap: 22 }}>
             <article
               style={{
                 background: "#ffffff",
@@ -344,39 +359,16 @@ export default async function AuthorityComplaintDetailPage({
                 padding: 22,
               }}
             >
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "1.08rem",
-                  fontWeight: 800,
-                  color: "#0f172a",
-                }}
-              >
+              <h2 style={{ margin: 0, fontSize: "1.08rem", fontWeight: 800, color: "#0f172a" }}>
                 Complaint summary
               </h2>
 
               <div style={{ marginTop: 16, display: "grid", gap: 16 }}>
                 <div>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.84rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.84rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Description
                   </p>
-                  <p
-                    style={{
-                      margin: "8px 0 0",
-                      color: "#334155",
-                      lineHeight: 1.75,
-                      fontSize: "0.96rem",
-                    }}
-                  >
+                  <p style={{ margin: "8px 0 0", color: "#334155", lineHeight: 1.75, fontSize: "0.96rem" }}>
                     {complaint.description}
                   </p>
                 </div>
@@ -389,16 +381,7 @@ export default async function AuthorityComplaintDetailPage({
                   }}
                 >
                   <div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.84rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.84rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Address
                     </p>
                     <p style={{ margin: "8px 0 0", color: "#0f172a", lineHeight: 1.7 }}>
@@ -407,16 +390,7 @@ export default async function AuthorityComplaintDetailPage({
                   </div>
 
                   <div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.84rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.84rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Administrative area
                     </p>
                     <p style={{ margin: "8px 0 0", color: "#0f172a", lineHeight: 1.7 }}>
@@ -427,16 +401,7 @@ export default async function AuthorityComplaintDetailPage({
                   </div>
 
                   <div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.84rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.84rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Location details
                     </p>
                     <p style={{ margin: "8px 0 0", color: "#0f172a", lineHeight: 1.7 }}>
@@ -445,16 +410,7 @@ export default async function AuthorityComplaintDetailPage({
                   </div>
 
                   <div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.84rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.84rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Coordinates
                     </p>
                     <p style={{ margin: "8px 0 0", color: "#0f172a", lineHeight: 1.7 }}>
@@ -476,14 +432,7 @@ export default async function AuthorityComplaintDetailPage({
                 padding: 22,
               }}
             >
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "1.08rem",
-                  fontWeight: 800,
-                  color: "#0f172a",
-                }}
-              >
+              <h2 style={{ margin: 0, fontSize: "1.08rem", fontWeight: 800, color: "#0f172a" }}>
                 Complaint image
               </h2>
 
@@ -525,14 +474,51 @@ export default async function AuthorityComplaintDetailPage({
                 </p>
               ) : null}
             </article>
+
+            {ai?.detected_image_url ? (
+              <article
+                style={{
+                  background: "#ffffff",
+                  border: "1px solid #dbe3e8",
+                  borderRadius: 22,
+                  boxShadow: "0 18px 40px rgba(15,23,42,0.08)",
+                  padding: 22,
+                }}
+              >
+                <h2 style={{ margin: 0, fontSize: "1.08rem", fontWeight: 800, color: "#0f172a" }}>
+                  Detected image output
+                </h2>
+
+                <div
+                  style={{
+                    marginTop: 16,
+                    borderRadius: 18,
+                    overflow: "hidden",
+                    border: "1px solid #dbe3e8",
+                    background: "#f8fafc",
+                    minHeight: 280,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <img
+                    src={ai.detected_image_url}
+                    alt="Detected complaint output"
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      maxHeight: 560,
+                      objectFit: "contain",
+                      background: "#f8fafc",
+                    }}
+                  />
+                </div>
+              </article>
+            ) : null}
           </section>
 
-          <aside
-            style={{
-              display: "grid",
-              gap: 22,
-            }}
-          >
+          <aside style={{ display: "grid", gap: 22 }}>
             <AuthorityActionPanel
               complaintId={complaint.id}
               currentStatus={complaint.status}
@@ -549,14 +535,7 @@ export default async function AuthorityComplaintDetailPage({
                 padding: 22,
               }}
             >
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "1.08rem",
-                  fontWeight: 800,
-                  color: "#0f172a",
-                }}
-              >
+              <h2 style={{ margin: 0, fontSize: "1.08rem", fontWeight: 800, color: "#0f172a" }}>
                 AI review summary
               </h2>
 
@@ -569,26 +548,10 @@ export default async function AuthorityComplaintDetailPage({
                     background: "#f8fbfc",
                   }}
                 >
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Fusion label
                   </p>
-                  <p
-                    style={{
-                      margin: "8px 0 0",
-                      fontSize: "1rem",
-                      fontWeight: 800,
-                      color: "#0f172a",
-                    }}
-                  >
+                  <p style={{ margin: "8px 0 0", fontSize: "1rem", fontWeight: 800, color: "#0f172a" }}>
                     {ai?.fusion_label || "Pending"}
                   </p>
                 </div>
@@ -608,26 +571,10 @@ export default async function AuthorityComplaintDetailPage({
                       background: "#ffffff",
                     }}
                   >
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.82rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Fusion confidence
                     </p>
-                    <p
-                      style={{
-                        margin: "8px 0 0",
-                        fontSize: "1rem",
-                        fontWeight: 800,
-                        color: "#0f172a",
-                      }}
-                    >
+                    <p style={{ margin: "8px 0 0", fontSize: "1rem", fontWeight: 800, color: "#0f172a" }}>
                       {nicePercent(ai?.fusion_confidence)}
                     </p>
                   </div>
@@ -640,26 +587,10 @@ export default async function AuthorityComplaintDetailPage({
                       background: "#ffffff",
                     }}
                   >
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "0.82rem",
-                        fontWeight: 800,
-                        color: "#64748b",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
+                    <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Priority score
                     </p>
-                    <p
-                      style={{
-                        margin: "8px 0 0",
-                        fontSize: "1rem",
-                        fontWeight: 800,
-                        color: "#0f172a",
-                      }}
-                    >
+                    <p style={{ margin: "8px 0 0", fontSize: "1rem", fontWeight: 800, color: "#0f172a" }}>
                       {ai?.priority_score != null ? ai.priority_score.toFixed(1) : "Pending"}
                     </p>
                   </div>
@@ -669,22 +600,11 @@ export default async function AuthorityComplaintDetailPage({
                   style={{
                     padding: 14,
                     borderRadius: 16,
-                    border: ai?.conflict_flag
-                      ? "1px solid #fdba74"
-                      : "1px solid #cbd5e1",
+                    border: ai?.conflict_flag ? "1px solid #fdba74" : "1px solid #cbd5e1",
                     background: ai?.conflict_flag ? "#fff7ed" : "#f8fafc",
                   }}
                 >
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Consistency check
                   </p>
                   <p
@@ -707,26 +627,10 @@ export default async function AuthorityComplaintDetailPage({
                     background: "#ffffff",
                   }}
                 >
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Summary
                   </p>
-                  <p
-                    style={{
-                      margin: "8px 0 0",
-                      lineHeight: 1.7,
-                      color: "#334155",
-                      fontSize: "0.93rem",
-                    }}
-                  >
+                  <p style={{ margin: "8px 0 0", lineHeight: 1.7, color: "#334155", fontSize: "0.93rem" }}>
                     {ai?.summary || "No AI summary available yet."}
                   </p>
                 </div>
@@ -742,29 +646,13 @@ export default async function AuthorityComplaintDetailPage({
                 padding: 22,
               }}
             >
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "1.08rem",
-                  fontWeight: 800,
-                  color: "#0f172a",
-                }}
-              >
+              <h2 style={{ margin: 0, fontSize: "1.08rem", fontWeight: 800, color: "#0f172a" }}>
                 Model outputs
               </h2>
 
               <div style={{ marginTop: 16, display: "grid", gap: 16 }}>
                 <div>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Text model
                   </p>
                   <p style={{ margin: "8px 0 0", color: "#0f172a", lineHeight: 1.7 }}>
@@ -776,16 +664,7 @@ export default async function AuthorityComplaintDetailPage({
                 </div>
 
                 <div>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Image model
                   </p>
 
@@ -819,16 +698,7 @@ export default async function AuthorityComplaintDetailPage({
                 </div>
 
                 <div>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.82rem",
-                      fontWeight: 800,
-                      color: "#64748b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
+                  <p style={{ margin: 0, fontSize: "0.82rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Model versions
                   </p>
 
