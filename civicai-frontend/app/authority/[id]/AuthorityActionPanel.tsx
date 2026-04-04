@@ -20,6 +20,7 @@ export default function AuthorityActionPanel({
   const [status, setStatus] = useState(currentStatus);
   const [resolutionNote, setResolutionNote] = useState(currentResolutionNote ?? "");
   const [saving, setSaving] = useState(false);
+  const [runningAi, setRunningAi] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgType, setMsgType] = useState<"info" | "error">("info");
 
@@ -56,6 +57,32 @@ export default function AuthorityActionPanel({
     }
   }
 
+  async function runAiNow() {
+    setRunningAi(true);
+    setMsg(null);
+
+    try {
+      const res = await fetch(`/api/authority/complaints/${complaintId}/run-ai`, {
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to run AI.");
+      }
+
+      setMsgType("info");
+      setMsg("AI processing completed successfully.");
+      router.refresh();
+    } catch (error) {
+      setMsgType("error");
+      setMsg(error instanceof Error ? error.message : "Failed to run AI.");
+    } finally {
+      setRunningAi(false);
+    }
+  }
+
   return (
     <article
       style={{
@@ -78,6 +105,54 @@ export default function AuthorityActionPanel({
       </h2>
 
       <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+          }}
+        >
+          <button
+            type="button"
+            onClick={runAiNow}
+            disabled={runningAi || saving}
+            style={{
+              minWidth: 160,
+              padding: "13px 18px",
+              borderRadius: 12,
+              border: "1px solid #0f766e",
+              background: runningAi ? "#99d5cf" : "#0f766e",
+              color: "#ffffff",
+              fontSize: "0.95rem",
+              fontWeight: 800,
+              cursor: runningAi || saving ? "not-allowed" : "pointer",
+              boxShadow: runningAi ? "none" : "0 8px 18px rgba(15,118,110,0.18)",
+            }}
+          >
+            {runningAi ? "Running AI..." : "Run AI now"}
+          </button>
+
+          <button
+            type="button"
+            onClick={saveUpdate}
+            disabled={saving || runningAi}
+            style={{
+              minWidth: 160,
+              padding: "13px 18px",
+              borderRadius: 12,
+              border: "1px solid #0f172a",
+              background: saving ? "#cbd5e1" : "#0f172a",
+              color: "#ffffff",
+              fontSize: "0.95rem",
+              fontWeight: 800,
+              cursor: saving || runningAi ? "not-allowed" : "pointer",
+              boxShadow: saving ? "none" : "0 8px 18px rgba(15,23,42,0.18)",
+            }}
+          >
+            {saving ? "Saving update..." : "Save update"}
+          </button>
+        </div>
+
         <div>
           <label
             style={{
@@ -91,27 +166,27 @@ export default function AuthorityActionPanel({
             Complaint status
           </label>
           <select
-  value={status}
-  onChange={(e) => setStatus(e.target.value)}
-  disabled={saving}
-  style={{
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 12,
-    border: "1px solid #cbd5e1",
-    outline: "none",
-    fontSize: "0.95rem",
-    background: "#ffffff",
-    color: "#0f172a",
-    boxSizing: "border-box",
-  }}
->
-  <option value="submitted">submitted</option>
-  <option value="processing">processing</option>
-  <option value="completed">completed</option>
-  <option value="resolved">resolved</option>
-  <option value="rejected">rejected</option>
-</select>
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            disabled={saving || runningAi}
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #cbd5e1",
+              outline: "none",
+              fontSize: "0.95rem",
+              background: "#ffffff",
+              color: "#0f172a",
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="submitted">submitted</option>
+            <option value="processing">processing</option>
+            <option value="completed">completed</option>
+            <option value="resolved">resolved</option>
+            <option value="rejected">rejected</option>
+          </select>
         </div>
 
         <div>
@@ -129,7 +204,7 @@ export default function AuthorityActionPanel({
           <textarea
             value={resolutionNote}
             onChange={(e) => setResolutionNote(e.target.value)}
-            disabled={saving}
+            disabled={saving || runningAi}
             placeholder="Write the action taken, field observation, or final resolution note."
             style={{
               width: "100%",
@@ -179,26 +254,6 @@ export default function AuthorityActionPanel({
             {resolvedAt ? new Date(resolvedAt).toLocaleString("en-BD") : "Not resolved yet"}
           </p>
         </div>
-
-        <button
-          type="button"
-          onClick={saveUpdate}
-          disabled={saving}
-          style={{
-            minWidth: 180,
-            padding: "13px 18px",
-            borderRadius: 12,
-            border: "1px solid #0f766e",
-            background: saving ? "#99d5cf" : "#0f766e",
-            color: "#ffffff",
-            fontSize: "0.95rem",
-            fontWeight: 800,
-            cursor: saving ? "not-allowed" : "pointer",
-            boxShadow: saving ? "none" : "0 8px 18px rgba(15,118,110,0.18)",
-          }}
-        >
-          {saving ? "Saving update..." : "Save update"}
-        </button>
 
         {msg ? (
           <div
