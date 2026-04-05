@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./login.module.css";
@@ -105,9 +106,10 @@ export default function LoginPage() {
     setErrors({});
   }
 
- function goNext() {
-  window.location.assign(nextUrl || "/");
-}
+  function goNext() {
+    window.location.assign(nextUrl || "/");
+  }
+
   async function getCurrentUser() {
     const {
       data: { user },
@@ -391,198 +393,230 @@ export default function LoginPage() {
     return "A verification code becomes active after you request one.";
   }, [expiresLeft, lastOtpSentAt]);
 
+  const heroTitle =
+    mode === "login"
+      ? "Welcome back"
+      : regStep === 1
+      ? "Create your account"
+      : "Verify your email";
+
+  const heroText =
+    mode === "login"
+      ? "Sign in to continue to complaint reporting and protected pages."
+      : regStep === 1
+      ? "Register to submit complaints and access verified reporting features."
+      : "Enter the latest 6-digit code sent to your email address.";
+
   return (
     <main className={styles.page}>
       <div className={styles.wrapper}>
-        <div className={styles.card}>
-          <div className={styles.header}>
-            <h1 className={styles.title}>CivicAI</h1>
-            <p className={styles.subtitle}>Sign in or create an account to continue.</p>
-            <p className={styles.redirectText}>
-              After authentication, you will be redirected to: <b>{nextUrl}</b>
-            </p>
+        <div className={styles.authShell}>
+          <div className={styles.brandBlock}>
+            <Link href="/" className={styles.brandLink}>
+              CivicAI
+            </Link>
+            <p className={styles.brandText}>Secure access for complaint reporting</p>
           </div>
 
-          <div className={styles.tabs}>
-            <button
-              type="button"
-              onClick={() => {
-                setMode("login");
-                setRegStep(1);
-                setOtp("");
-                clearMessages();
-              }}
-              disabled={loading || otpSending}
-              className={`${styles.tabButton} ${mode === "login" ? styles.tabActive : ""}`}
-            >
-              Sign in
-            </button>
+          <div className={styles.card}>
+            <div className={styles.header}>
+              <p className={styles.eyebrow}>Secure access</p>
+              <h1 className={styles.title}>{heroTitle}</h1>
+              <p className={styles.subtitle}>{heroText}</p>
+              <p className={styles.redirectText}>
+                Continue to <b>{nextUrl}</b> after successful authentication.
+              </p>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setMode("register");
-                setRegStep(1);
-                setOtp("");
-                clearMessages();
-              }}
-              disabled={loading || otpSending}
-              className={`${styles.tabButton} ${mode === "register" ? styles.tabActive : ""}`}
-            >
-              Register
-            </button>
+            <div className={styles.tabs}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setRegStep(1);
+                  setOtp("");
+                  clearMessages();
+                }}
+                disabled={loading || otpSending}
+                className={`${styles.tabButton} ${mode === "login" ? styles.tabActive : ""}`}
+              >
+                Sign in
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("register");
+                  setRegStep(1);
+                  setOtp("");
+                  clearMessages();
+                }}
+                disabled={loading || otpSending}
+                className={`${styles.tabButton} ${mode === "register" ? styles.tabActive : ""}`}
+              >
+                Register
+              </button>
+            </div>
+
+            {errors.form && <InlineAlert text={errors.form} variant="error" />}
+            {msg && <InlineAlert text={msg} variant="info" />}
+
+            {mode === "login" ? (
+              <form onSubmit={login} className={styles.form}>
+                <Label text="Email address" />
+                <Input
+                  placeholder="name@example.com"
+                  value={loginEmail}
+                  onChange={setLoginEmail}
+                  disabled={loading}
+                />
+
+                <div className={styles.spacer12} />
+
+                <Label text="Password" />
+                <Input
+                  placeholder="Enter your password"
+                  type="password"
+                  value={loginPassword}
+                  onChange={setLoginPassword}
+                  disabled={loading}
+                />
+
+                <div className={styles.spacer18} />
+
+                <PrimaryButton disabled={loading} text={loading ? "Signing in..." : "Sign in"} />
+              </form>
+            ) : (
+              <>
+                {regStep === 1 ? (
+                  <form onSubmit={registerStep1} className={styles.form}>
+                    <Label text="Full name" />
+                    <Input
+                      placeholder="Nico Robin"
+                      value={fullName}
+                      onChange={setFullName}
+                      disabled={loading}
+                      invalid={!!errors.fullName}
+                    />
+                    {errors.fullName && <FieldError text={errors.fullName} />}
+
+                    <div className={styles.spacer12} />
+
+                    <Label text="Email address" />
+                    <Input
+                      placeholder="name@example.com"
+                      value={regEmail}
+                      onChange={setRegEmail}
+                      disabled={loading}
+                      invalid={!!errors.email}
+                    />
+                    {errors.email && <FieldError text={errors.email} />}
+
+                    <div className={styles.spacer12} />
+
+                    <Label text="Password" />
+                    <Input
+                      placeholder="Minimum 6 characters"
+                      type="password"
+                      value={regPassword}
+                      onChange={setRegPassword}
+                      disabled={loading}
+                      invalid={!!errors.password}
+                    />
+                    {errors.password && <FieldError text={errors.password} />}
+
+                    <div className={styles.spacer12} />
+
+                    <Label text="Confirm password" />
+                    <Input
+                      placeholder="Re-enter your password"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={setConfirmPassword}
+                      disabled={loading}
+                      invalid={!!errors.confirmPassword}
+                    />
+                    {errors.confirmPassword && <FieldError text={errors.confirmPassword} />}
+
+                    <div className={styles.spacer18} />
+
+                    <PrimaryButton
+                      disabled={loading}
+                      text={loading ? "Creating account..." : "Create account"}
+                    />
+                  </form>
+                ) : (
+                  <form onSubmit={verifyOtp} className={styles.form}>
+                    <Label text="Verification code" />
+                    <Input
+                      placeholder="Enter the latest 6-digit code"
+                      value={otp}
+                      onChange={setOtp}
+                      disabled={loading}
+                      invalid={!!errors.otp}
+                    />
+                    {errors.otp && <FieldError text={errors.otp} />}
+
+                    <div className={styles.statusBox}>
+                      <div className={styles.statusTitle}>Verification status</div>
+                      <div className={styles.statusText}>{otpStatusText}</div>
+                      <div className={styles.statusText}>{otpExpiryText}</div>
+                      {lastOtpSentAt && (
+                        <div className={styles.statusSubtext}>
+                          Last code sent: {formatDateTime(lastOtpSentAt)}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={styles.spacer12} />
+
+                    <button
+                      type="button"
+                      disabled={
+                        loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail
+                      }
+                      onClick={() => {
+                        if (otpUserId && regEmail) sendOtpNow(otpUserId, regEmail);
+                      }}
+                      className={styles.secondaryButton}
+                    >
+                      {otpSending
+                        ? "Sending code..."
+                        : cooldownLeft > 0
+                        ? `Resend available in ${formatTime(cooldownLeft)}`
+                        : "Send verification code"}
+                    </button>
+
+                    <div className={styles.spacer12} />
+
+                    <PrimaryButton
+                      disabled={loading}
+                      text={loading ? "Verifying..." : "Verify and continue"}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegStep(1);
+                        setOtp("");
+                        clearMessages();
+                      }}
+                      disabled={loading || otpSending}
+                      className={styles.backButton}
+                    >
+                      Back
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+
+            <div className={styles.footerRow}>
+              <Link href="/" className={styles.footerLink}>
+                Back to homepage
+              </Link>
+            </div>
           </div>
-
-          {errors.form && <InlineAlert text={errors.form} variant="error" />}
-          {msg && <InlineAlert text={msg} variant="info" />}
-
-          {mode === "login" ? (
-            <form onSubmit={login}>
-              <Label text="Email address" />
-              <Input
-                placeholder="name@example.com"
-                value={loginEmail}
-                onChange={setLoginEmail}
-                disabled={loading}
-              />
-
-              <div className={styles.spacer12} />
-
-              <Label text="Password" />
-              <Input
-                placeholder="Enter your password"
-                type="password"
-                value={loginPassword}
-                onChange={setLoginPassword}
-                disabled={loading}
-              />
-
-              <div className={styles.spacer18} />
-
-              <PrimaryButton disabled={loading} text={loading ? "Signing in..." : "Sign in"} />
-            </form>
-          ) : (
-            <>
-              {regStep === 1 ? (
-                <form onSubmit={registerStep1}>
-                  <Label text="Full name" />
-                  <Input
-                    placeholder="Nico Robin"
-                    value={fullName}
-                    onChange={setFullName}
-                    disabled={loading}
-                    invalid={!!errors.fullName}
-                  />
-                  {errors.fullName && <FieldError text={errors.fullName} />}
-
-                  <div className={styles.spacer12} />
-
-                  <Label text="Email address" />
-                  <Input
-                    placeholder="name@example.com"
-                    value={regEmail}
-                    onChange={setRegEmail}
-                    disabled={loading}
-                    invalid={!!errors.email}
-                  />
-                  {errors.email && <FieldError text={errors.email} />}
-
-                  <div className={styles.spacer12} />
-
-                  <Label text="Password" />
-                  <Input
-                    placeholder="Minimum 6 characters"
-                    type="password"
-                    value={regPassword}
-                    onChange={setRegPassword}
-                    disabled={loading}
-                    invalid={!!errors.password}
-                  />
-                  {errors.password && <FieldError text={errors.password} />}
-
-                  <div className={styles.spacer12} />
-
-                  <Label text="Confirm password" />
-                  <Input
-                    placeholder="Re-enter your password"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={setConfirmPassword}
-                    disabled={loading}
-                    invalid={!!errors.confirmPassword}
-                  />
-                  {errors.confirmPassword && <FieldError text={errors.confirmPassword} />}
-
-                  <div className={styles.spacer18} />
-
-                  <PrimaryButton
-                    disabled={loading}
-                    text={loading ? "Creating account..." : "Create account"}
-                  />
-                </form>
-              ) : (
-                <form onSubmit={verifyOtp}>
-                  <Label text="Verification code" />
-                  <Input
-                    placeholder="Enter the latest 6-digit code"
-                    value={otp}
-                    onChange={setOtp}
-                    disabled={loading}
-                    invalid={!!errors.otp}
-                  />
-                  {errors.otp && <FieldError text={errors.otp} />}
-
-                  <div className={styles.statusBox}>
-                    <div className={styles.statusTitle}>Verification status</div>
-                    <div className={styles.statusText}>{otpStatusText}</div>
-                    <div className={styles.statusText}>{otpExpiryText}</div>
-                    {lastOtpSentAt && (
-                      <div className={styles.statusSubtext}>
-                        Last code sent: {formatDateTime(lastOtpSentAt)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={styles.spacer12} />
-
-                  <button
-                    type="button"
-                    disabled={loading || otpSending || cooldownLeft > 0 || !otpUserId || !regEmail}
-                    onClick={() => {
-                      if (otpUserId && regEmail) sendOtpNow(otpUserId, regEmail);
-                    }}
-                    className={styles.secondaryButton}
-                  >
-                    {otpSending
-                      ? "Sending code..."
-                      : cooldownLeft > 0
-                      ? `Resend available in ${formatTime(cooldownLeft)}`
-                      : "Send verification code"}
-                  </button>
-
-                  <div className={styles.spacer12} />
-
-                  <PrimaryButton
-                    disabled={loading}
-                    text={loading ? "Verifying..." : "Verify and continue"}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRegStep(1);
-                      setOtp("");
-                      clearMessages();
-                    }}
-                    disabled={loading || otpSending}
-                    className={styles.backButton}
-                  >
-                    Back
-                  </button>
-                </form>
-              )}
-            </>
-          )}
         </div>
       </div>
     </main>
