@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./report.module.css";
@@ -319,282 +320,351 @@ export default function ReportForm({ userId }: { userId: string }) {
   return (
     <main className={styles.page}>
       <div className={styles.wrapper}>
-        <section className={styles.hero}>
-          <p className={styles.eyebrow}>Verified complaint reporting</p>
-          <h1 className={styles.title}>Report a civic complaint</h1>
-          <p className={styles.subtitle}>
-            Share the issue location, a clear description, and an optional image so the
-            complaint can be reviewed faster and more accurately.
-          </p>
-        </section>
-
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <div>
-              <h2 className={styles.cardTitle}>Complaint submission form</h2>
-              <p className={styles.cardText}>
-                Complete the required details below. Use the map to mark the exact
-                problem location, not just your current location.
+        <section className={styles.pageGrid}>
+          <aside className={styles.sidebar}>
+            <div className={styles.sidebarCard}>
+              <p className={styles.sidebarEyebrow}>Citizen workspace</p>
+              <h2 className={styles.sidebarTitle}>Report page</h2>
+              <p className={styles.sidebarText}>
+                Submit a clear complaint with location, description, and image so
+                it can be reviewed faster and more accurately.
               </p>
+
+              <nav className={styles.sidebarNav}>
+                <Link href="/" className={styles.sidebarLink}>
+                  Back to homepage
+                </Link>
+                <Link href="/report" className={styles.sidebarLinkActive}>
+                  Report complaint
+                </Link>
+              </nav>
+
+              <div className={styles.sidebarHelp}>
+                <p className={styles.sidebarHelpTitle}>Tips for better reports</p>
+                <ul className={styles.sidebarHelpList}>
+                  <li>Use a short and clear title</li>
+                  <li>Mark the exact problem location</li>
+                  <li>Add landmarks in location details</li>
+                  <li>Upload a helpful image if available</li>
+                </ul>
+              </div>
             </div>
-            <div className={styles.cardBadge}>Citizen report</div>
-          </div>
+          </aside>
 
-          <form onSubmit={submit} className={styles.form}>
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Reporter information</h3>
+          <div className={styles.mainContent}>
+            <section className={styles.hero}>
+              <p className={styles.eyebrow}>Verified complaint reporting</p>
+              <h1 className={styles.title}>Report a civic complaint</h1>
+              <p className={styles.subtitle}>
+                Share the issue location, a clear description, and an optional image so the
+                complaint can be reviewed faster and more accurately.
+              </p>
+            </section>
 
-              <div className={styles.gridTwo}>
-                <div className={styles.inputGroup}>
-                  <label className={styles.label}>Reporter name</label>
-                  <input
-                    value={reporterName}
-                    onChange={(e) => setReporterName(e.target.value)}
-                    placeholder="Enter your full name"
-                    className={styles.input}
-                    disabled={loading}
-                  />
-                </div>
+            <div className={styles.summaryGrid}>
+              <div className={styles.summaryCard}>
+                <p className={styles.summaryLabel}>Access</p>
+                <h3 className={styles.summaryValue}>Verified user</h3>
+                <p className={styles.summaryText}>
+                  You can submit a complaint because your account is verified.
+                </p>
+              </div>
 
-                <div className={styles.inputGroup}>
-                  <label className={styles.label}>Complaint title</label>
-                  <input
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="For example, Broken street light near main road"
-                    className={styles.input}
-                    disabled={loading}
-                  />
-                </div>
+              <div className={styles.summaryCard}>
+                <p className={styles.summaryLabel}>Map flow</p>
+                <h3 className={styles.summaryValue}>Select then mark</h3>
+                <p className={styles.summaryText}>
+                  First choose the area, then click the exact problem point on the map.
+                </p>
+              </div>
+
+              <div className={styles.summaryCard}>
+                <p className={styles.summaryLabel}>Recommended</p>
+                <h3 className={styles.summaryValue}>Image + details</h3>
+                <p className={styles.summaryText}>
+                  A clear description and image help authorities review the issue faster.
+                </p>
               </div>
             </div>
 
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Location and map</h3>
+            <div className={styles.card}>
+              <div className={styles.cardHeader}>
+                <div>
+                  <h2 className={styles.cardTitle}>Complaint submission form</h2>
+                  <p className={styles.cardText}>
+                    Complete the required details below. Use the map to mark the exact
+                    problem location, not just your current location.
+                  </p>
+                </div>
+                <div className={styles.cardBadge}>Citizen report</div>
+              </div>
 
-              <div className={styles.locationWorkspace}>
-                <div className={styles.locationControls}>
-                  <div className={styles.locationIntro}>
-                    <p className={styles.locationTitle}>Select the complaint area</p>
-                    <p className={styles.locationText}>
-                      Choose the division, district, and upazila or Dhaka city area first.
-                      The map on the right will move automatically so the exact complaint
-                      point can be marked more easily.
-                    </p>
+              <form onSubmit={submit} className={styles.form}>
+                <div className={styles.section}>
+                  <div className={styles.sectionHeading}>
+                    <p className={styles.sectionEyebrow}>Step 1</p>
+                    <h3 className={styles.sectionTitle}>Reporter information</h3>
                   </div>
 
                   <div className={styles.gridTwo}>
                     <div className={styles.inputGroup}>
-                      <label className={styles.label}>Division</label>
-                      <select
-                        value={division}
-                        onChange={(e) => {
-                          setDivision(e.target.value);
-                          setDistrict("");
-                          setUpazila("");
-                          setCityArea("");
-                          setLat(null);
-                          setLng(null);
-                        }}
+                      <label className={styles.label}>Reporter name</label>
+                      <input
+                        value={reporterName}
+                        onChange={(e) => setReporterName(e.target.value)}
+                        placeholder="Enter your full name"
                         className={styles.input}
                         disabled={loading}
-                      >
-                        <option value="">Select division</option>
-                        {divisions.map((item) => (
-                          <option key={item.id} value={item.name}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </div>
 
                     <div className={styles.inputGroup}>
-                      <label className={styles.label}>District</label>
-                      <select
-                        value={district}
-                        onChange={(e) => {
-                          setDistrict(e.target.value);
-                          setUpazila("");
-                          setCityArea("");
-                          setLat(null);
-                          setLng(null);
-                        }}
+                      <label className={styles.label}>Complaint title</label>
+                      <input
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="For example, Broken street light near main road"
                         className={styles.input}
-                        disabled={loading || !division}
-                      >
-                        <option value="">Select district</option>
-                        {availableDistricts.map((item) => (
-                          <option key={item.id} value={item.name}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
+                        disabled={loading}
+                      />
                     </div>
+                  </div>
+                </div>
 
-                    <div className={styles.inputGroup}>
-                      <label className={styles.label}>
-                        Upazila {isDhakaDistrict ? "(choose this or Dhaka city area)" : ""}
-                      </label>
-                      <select
-                        value={upazila}
-                        onChange={(e) => {
-                          setUpazila(e.target.value);
-                          setLat(null);
-                          setLng(null);
-                          if (isDhakaDistrict && e.target.value) {
-                            setCityArea("");
-                          }
-                        }}
-                        className={styles.input}
-                        disabled={loading || !district || (isDhakaDistrict && !!cityArea)}
-                      >
-                        <option value="">Select upazila</option>
-                        {availableUpazilas.map((item) => (
-                          <option key={item.id} value={item.name}>
-                            {item.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div className={styles.section}>
+                  <div className={styles.sectionHeading}>
+                    <p className={styles.sectionEyebrow}>Step 2</p>
+                    <h3 className={styles.sectionTitle}>Location and map</h3>
+                  </div>
 
-                    {isDhakaDistrict && (
-                      <div className={styles.inputGroup}>
-                        <label className={styles.label}>Dhaka city area</label>
-                        <select
-                          value={cityArea}
-                          onChange={(e) => {
-                            setCityArea(e.target.value);
-                            setLat(null);
-                            setLng(null);
-                            if (e.target.value) {
-                              setUpazila("");
-                            }
-                          }}
-                          className={styles.input}
-                          disabled={loading || !!upazila}
-                        >
-                          <option value="">Select city area</option>
-                          {availableDhakaCityAreas.map((item, index) => (
-                            <option
-                              key={`${item.city_corporation}-${item.name}-${index}`}
-                              value={item.name}
-                            >
-                              {item.name} ({item.city_corporation})
-                            </option>
-                          ))}
-                        </select>
+                  <div className={styles.locationWorkspace}>
+                    <div className={styles.locationControls}>
+                      <div className={styles.locationIntro}>
+                        <p className={styles.locationTitle}>Select the complaint area</p>
+                        <p className={styles.locationText}>
+                          Choose the division, district, and upazila or Dhaka city area first.
+                          The map will move automatically so the exact complaint
+                          point can be marked more easily.
+                        </p>
                       </div>
-                    )}
+
+                      <div className={styles.gridTwo}>
+                        <div className={styles.inputGroup}>
+                          <label className={styles.label}>Division</label>
+                          <select
+                            value={division}
+                            onChange={(e) => {
+                              setDivision(e.target.value);
+                              setDistrict("");
+                              setUpazila("");
+                              setCityArea("");
+                              setLat(null);
+                              setLng(null);
+                            }}
+                            className={styles.input}
+                            disabled={loading}
+                          >
+                            <option value="">Select division</option>
+                            {divisions.map((item) => (
+                              <option key={item.id} value={item.name}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className={styles.inputGroup}>
+                          <label className={styles.label}>District</label>
+                          <select
+                            value={district}
+                            onChange={(e) => {
+                              setDistrict(e.target.value);
+                              setUpazila("");
+                              setCityArea("");
+                              setLat(null);
+                              setLng(null);
+                            }}
+                            className={styles.input}
+                            disabled={loading || !division}
+                          >
+                            <option value="">Select district</option>
+                            {availableDistricts.map((item) => (
+                              <option key={item.id} value={item.name}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className={styles.inputGroup}>
+                          <label className={styles.label}>
+                            Upazila {isDhakaDistrict ? "(choose this or Dhaka city area)" : ""}
+                          </label>
+                          <select
+                            value={upazila}
+                            onChange={(e) => {
+                              setUpazila(e.target.value);
+                              setLat(null);
+                              setLng(null);
+                              if (isDhakaDistrict && e.target.value) {
+                                setCityArea("");
+                              }
+                            }}
+                            className={styles.input}
+                            disabled={loading || !district || (isDhakaDistrict && !!cityArea)}
+                          >
+                            <option value="">Select upazila</option>
+                            {availableUpazilas.map((item) => (
+                              <option key={item.id} value={item.name}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {isDhakaDistrict && (
+                          <div className={styles.inputGroup}>
+                            <label className={styles.label}>Dhaka city area</label>
+                            <select
+                              value={cityArea}
+                              onChange={(e) => {
+                                setCityArea(e.target.value);
+                                setLat(null);
+                                setLng(null);
+                                if (e.target.value) {
+                                  setUpazila("");
+                                }
+                              }}
+                              className={styles.input}
+                              disabled={loading || !!upazila}
+                            >
+                              <option value="">Select city area</option>
+                              {availableDhakaCityAreas.map((item, index) => (
+                                <option
+                                  key={`${item.city_corporation}-${item.name}-${index}`}
+                                  value={item.name}
+                                >
+                                  {item.name} ({item.city_corporation})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className={styles.inputGroup}>
+                        <label className={styles.label}>Location details</label>
+                        <textarea
+                          value={locationDetails}
+                          onChange={(e) => setLocationDetails(e.target.value)}
+                          placeholder="Road name, village, market, nearby landmark, ward number, building name, or any details that help identify the place."
+                          className={`${styles.input} ${styles.textarea}`}
+                          disabled={loading}
+                        />
+                      </div>
+                    </div>
+
+                    <div className={styles.mapPanel}>
+                      <div className={styles.mapPanelHeader}>
+                        <p className={styles.mapPanelTitle}>Live location preview</p>
+                        <p className={styles.mapPanelText}>
+                          After choosing the area, click the exact point on the map.
+                        </p>
+                      </div>
+
+                      <div className={styles.mapShell}>
+                        <LocationPicker
+                          lat={lat}
+                          lng={lng}
+                          areaCenter={selectedAreaCenter}
+                          onChange={(newLat, newLng) => {
+                            setLat(newLat);
+                            setLng(newLng);
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={styles.section}>
+                  <div className={styles.sectionHeading}>
+                    <p className={styles.sectionEyebrow}>Step 3</p>
+                    <h3 className={styles.sectionTitle}>Complaint details</h3>
                   </div>
 
                   <div className={styles.inputGroup}>
-                    <label className={styles.label}>Location details</label>
+                    <label className={styles.label}>Description</label>
                     <textarea
-                      value={locationDetails}
-                      onChange={(e) => setLocationDetails(e.target.value)}
-                      placeholder="Road name, village, market, nearby landmark, ward number, building name, or any details that help identify the place."
-                      className={`${styles.input} ${styles.textarea}`}
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="Describe the issue clearly. Include what is happening, how long it has existed, who is affected, and any safety or access concerns."
+                      className={`${styles.input} ${styles.textareaLarge}`}
                       disabled={loading}
                     />
                   </div>
-                </div>
 
-                <div className={styles.mapPanel}>
-                  <div className={styles.mapPanelHeader}>
-                    <p className={styles.mapPanelTitle}>Live location preview</p>
-                    <p className={styles.mapPanelText}>
-                      After choosing the area, click the exact point on the map.
-                    </p>
-                  </div>
-
-                  <div className={styles.mapShell}>
-                    <LocationPicker
-                      lat={lat}
-                      lng={lng}
-                      areaCenter={selectedAreaCenter}
-                      onChange={(newLat, newLng) => {
-                        setLat(newLat);
-                        setLng(newLng);
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Complaint details</h3>
-
-              <div className={styles.inputGroup}>
-                <label className={styles.label}>Description</label>
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the issue clearly. Include what is happening, how long it has existed, who is affected, and any safety or access concerns."
-                  className={`${styles.input} ${styles.textareaLarge}`}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className={styles.inputGroup}>
-                <label className={styles.label}>Upload an image (optional)</label>
-                <div className={styles.uploadBox}>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp"
-                    onChange={(e) => handleImageChange(e.target.files?.[0] ?? null)}
-                    className={styles.uploadInput}
-                    disabled={loading}
-                  />
-                  <p className={styles.uploadHint}>
-                    Supported formats: JPG, PNG, WEBP. Maximum size: {MAX_IMAGE_SIZE_MB} MB.
-                  </p>
-                </div>
-
-                {imagePreviewUrl && (
-                  <div className={styles.imagePreview}>
-                    <div className={styles.imagePreviewHeader}>
-                      <div>
-                        <p className={styles.imagePreviewTitle}>Selected image</p>
-                        <p className={styles.imagePreviewMeta}>{imageFile?.name}</p>
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.removeButton}
-                        onClick={() => handleImageChange(null)}
+                  <div className={styles.inputGroup}>
+                    <label className={styles.label}>Upload an image (optional)</label>
+                    <div className={styles.uploadBox}>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,image/webp"
+                        onChange={(e) => handleImageChange(e.target.files?.[0] ?? null)}
+                        className={styles.uploadInput}
                         disabled={loading}
-                      >
-                        Remove
-                      </button>
+                      />
+                      <p className={styles.uploadHint}>
+                        Supported formats: JPG, PNG, WEBP. Maximum size: {MAX_IMAGE_SIZE_MB} MB.
+                      </p>
                     </div>
 
-                    <img
-                      src={imagePreviewUrl}
-                      alt="Complaint preview"
-                      className={styles.imageThumb}
-                    />
+                    {imagePreviewUrl && (
+                      <div className={styles.imagePreview}>
+                        <div className={styles.imagePreviewHeader}>
+                          <div>
+                            <p className={styles.imagePreviewTitle}>Selected image</p>
+                            <p className={styles.imagePreviewMeta}>{imageFile?.name}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className={styles.removeButton}
+                            onClick={() => handleImageChange(null)}
+                            disabled={loading}
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <img
+                          src={imagePreviewUrl}
+                          alt="Complaint preview"
+                          className={styles.imageThumb}
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
 
-            <div className={styles.actionsRow}>
-              <button type="submit" disabled={loading} className={styles.primaryButton}>
-                {loading ? "Submitting complaint..." : "Submit complaint"}
-              </button>
-            </div>
-          </form>
+                <div className={styles.actionsRow}>
+                  <button type="submit" disabled={loading} className={styles.primaryButton}>
+                    {loading ? "Submitting complaint..." : "Submit complaint"}
+                  </button>
+                </div>
+              </form>
 
-          {msg && (
-            <div
-              className={`${styles.alert} ${
-                msgType === "error" ? styles.alertError : styles.alertInfo
-              }`}
-            >
-              {msg}
+              {msg && (
+                <div
+                  className={`${styles.alert} ${
+                    msgType === "error" ? styles.alertError : styles.alertInfo
+                  }`}
+                >
+                  {msg}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        </section>
       </div>
     </main>
   );

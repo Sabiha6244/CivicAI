@@ -9,7 +9,7 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import { icon, type LatLngTuple } from "leaflet";
-
+import styles from "./report.module.css";
 
 type LocationPickerProps = {
   lat: number | null;
@@ -75,8 +75,6 @@ function AreaCenterMover({
   const map = useMap();
 
   useEffect(() => {
-    // Only auto-move to selected division/district center
-    // when exact complaint point has not been selected yet.
     if (lat === null && lng === null && areaCenter) {
       map.flyTo([areaCenter.lat, areaCenter.lng], areaCenter.zoom ?? 11, {
         duration: 0.8,
@@ -181,29 +179,13 @@ export default function LocationPicker({
     lat !== null && lng !== null ? [lat, lng] : null;
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          flexWrap: "wrap",
-          marginBottom: 10,
-        }}
-      >
+    <div className={styles.locationPicker}>
+      <div className={styles.locationActionRow}>
         <button
           type="button"
           onClick={useCurrentLocation}
           disabled={locating}
-          style={{
-            padding: "10px 14px",
-            borderRadius: "10px",
-            border: "1px solid #cbd5e1",
-            background: "#ffffff",
-            color: "#0f172a",
-            fontSize: "0.92rem",
-            fontWeight: 700,
-            cursor: locating ? "not-allowed" : "pointer",
-          }}
+          className={styles.locationActionButton}
         >
           {locating ? "Getting current location..." : "Use my current location"}
         </button>
@@ -211,62 +193,22 @@ export default function LocationPicker({
         <button
           type="button"
           onClick={startManualSelection}
-          style={{
-            padding: "10px 14px",
-            borderRadius: "10px",
-            border: "1px solid #cbd5e1",
-            background: "#ffffff",
-            color: "#0f172a",
-            fontSize: "0.92rem",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
+          className={styles.locationActionButton}
         >
           Mark another location on map
         </button>
       </div>
 
-      <div
-        style={{
-          marginBottom: 10,
-          padding: "10px 12px",
-          borderRadius: "10px",
-          background: "#f8fafc",
-          border: "1px solid #e2e8f0",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "0.88rem",
-            fontWeight: 700,
-            color: "#0f766e",
-          }}
-        >
-          {locationStatus}
-        </div>
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: "0.84rem",
-            color: "#64748b",
-            lineHeight: 1.5,
-          }}
-        >
-          {locationHelp}
-        </div>
+      <div className={styles.locationStatusBox}>
+        <div className={styles.locationStatusTitle}>{locationStatus}</div>
+        <div className={styles.locationStatusText}>{locationHelp}</div>
       </div>
 
       <MapContainer
         center={defaultCenter}
         zoom={defaultZoom}
         scrollWheelZoom={true}
-        style={{
-          height: "360px",
-          width: "100%",
-          borderRadius: "14px",
-          overflow: "hidden",
-          border: "1px solid #cbd5e1",
-        }}
+        className={styles.locationMapFrame}
       >
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
@@ -279,15 +221,7 @@ export default function LocationPicker({
       </MapContainer>
 
       {locationError ? (
-        <div
-          style={{
-            marginTop: 10,
-            fontSize: "0.84rem",
-            color: "#b91c1c",
-          }}
-        >
-          {locationError}
-        </div>
+        <div className={styles.locationError}>{locationError}</div>
       ) : null}
     </div>
   );

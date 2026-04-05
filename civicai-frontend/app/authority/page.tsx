@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import styles from "./authority.module.css";
 
 type ComplaintRow = {
   id: string;
@@ -39,44 +40,32 @@ function formatDate(value: string) {
   });
 }
 
-function badgeStyle(status: string) {
+function statusClass(status: string) {
   switch (status) {
     case "submitted":
-      return {
-        background: "#eff6ff",
-        color: "#1d4ed8",
-        border: "1px solid #bfdbfe",
-      };
+      return styles.badgeSubmitted;
     case "processing":
-      return {
-        background: "#fffbeb",
-        color: "#b45309",
-        border: "1px solid #fde68a",
-      };
+      return styles.badgeProcessing;
     case "completed":
-      return {
-        background: "#ecfdf5",
-        color: "#047857",
-        border: "1px solid #a7f3d0",
-      };
     case "resolved":
-      return {
-        background: "#ecfdf5",
-        color: "#047857",
-        border: "1px solid #a7f3d0",
-      };
+      return styles.badgeResolved;
     case "rejected":
-      return {
-        background: "#fef2f2",
-        color: "#991b1b",
-        border: "1px solid #fecaca",
-      };
+      return styles.badgeRejected;
     default:
-      return {
-        background: "#f8fafc",
-        color: "#475569",
-        border: "1px solid #cbd5e1",
-      };
+      return styles.badge;
+  }
+}
+
+function priorityClass(priority?: string | null) {
+  switch (priority) {
+    case "high":
+      return styles.priorityHigh;
+    case "medium":
+      return styles.priorityMedium;
+    case "low":
+      return styles.priorityLow;
+    default:
+      return styles.chip;
   }
 }
 
@@ -137,20 +126,11 @@ export default async function AuthorityPage() {
 
   if (complaintsError) {
     return (
-      <main style={{ padding: "32px", maxWidth: 1200, margin: "0 auto" }}>
-        <h1 style={{ fontSize: "2rem", fontWeight: 800, marginBottom: 12 }}>
-          Authority dashboard
-        </h1>
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 14,
-            border: "1px solid #fecaca",
-            background: "#fef2f2",
-            color: "#991b1b",
-          }}
-        >
-          Failed to load complaints: {complaintsError.message}
+      <main className={styles.page}>
+        <div className={styles.wrapper}>
+          <div className={styles.alertBox}>
+            Failed to load complaints: {complaintsError.message}
+          </div>
         </div>
       </main>
     );
@@ -195,306 +175,170 @@ export default async function AuthorityPage() {
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background:
-          "linear-gradient(180deg, rgba(15,118,110,0.06) 0%, rgba(15,118,110,0) 28%), #f8fafc",
-      }}
-    >
-      <div style={{ maxWidth: 1240, margin: "0 auto", padding: "42px 20px 64px" }}>
-        <section style={{ marginBottom: 28 }}>
-          <p
-            style={{
-              margin: 0,
-              fontSize: "0.8rem",
-              fontWeight: 800,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "#0f766e",
-            }}
-          >
-            Authority review workspace
-          </p>
-          <h1
-            style={{
-              margin: "10px 0 0",
-              fontSize: "clamp(2rem, 4vw, 3rem)",
-              lineHeight: 1.08,
-              letterSpacing: "-0.03em",
-              color: "#0f172a",
-              fontWeight: 800,
-            }}
-          >
-            Complaint review dashboard
-          </h1>
-          <p
-            style={{
-              margin: "14px 0 0",
-              maxWidth: 760,
-              color: "#475569",
-              lineHeight: 1.7,
-              fontSize: "1rem",
-            }}
-          >
-            Review citizen complaints with AI-assisted category, confidence, and
-            priority signals before taking action.
-          </p>
-        </section>
+    <main className={styles.page}>
+      <div className={styles.wrapper}>
+        <section className={styles.pageGrid}>
+          <aside className={styles.sidebar}>
+            <div className={styles.sidebarCard}>
+              <p className={styles.sidebarEyebrow}>Authority workspace</p>
+              <h2 className={styles.sidebarTitle}>Dashboard</h2>
+              <p className={styles.sidebarText}>
+                Review complaint submissions, inspect AI results, and open each
+                case for a full decision workflow.
+              </p>
 
-        <section
-          style={{
-            background: "#ffffff",
-            border: "1px solid #dbe3e8",
-            borderRadius: 22,
-            boxShadow: "0 18px 40px rgba(15,23,42,0.08)",
-            padding: 24,
-          }}
-        >
-          <div style={{ display: "grid", gap: 18 }}>
-            {complaints.length === 0 ? (
-              <div
-                style={{
-                  padding: 24,
-                  borderRadius: 16,
-                  border: "1px solid #e2e8f0",
-                  background: "#f8fafc",
-                  color: "#475569",
-                }}
-              >
-                No complaints available yet.
+              <nav className={styles.sidebarNav}>
+                <Link href="/" className={styles.sidebarLink}>
+                  Back to homepage
+                </Link>
+                <Link href="/authority" className={styles.sidebarLinkActive}>
+                  Authority dashboard
+                </Link>
+              </nav>
+
+              <div className={styles.sidebarHelp}>
+                <p className={styles.sidebarHelpTitle}>Review priorities</p>
+                <ul className={styles.sidebarHelpList}>
+                  <li>Check AI label and confidence</li>
+                  <li>Review image and complaint summary</li>
+                  <li>Update status and resolution notes</li>
+                  <li>Use detail page for full complaint review</li>
+                </ul>
               </div>
-            ) : (
-              complaints.map((complaint) => {
-                const media = mediaByComplaint.get(complaint.id);
-                const ai = inferenceByComplaint.get(complaint.id);
-                const area =
-                  complaint.city_area || complaint.upazila || complaint.district || "Unknown";
-                const statusChip = badgeStyle(complaint.status);
+            </div>
+          </aside>
 
-                return (
-                  <article
-                    key={complaint.id}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "180px minmax(0, 1fr)",
-                      gap: 18,
-                      padding: 18,
-                      borderRadius: 18,
-                      border: "1px solid #e2e8f0",
-                      background: "#fcfdff",
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "100%",
-                        aspectRatio: "16 / 11",
-                        borderRadius: 14,
-                        overflow: "hidden",
-                        border: "1px solid #dbe3e8",
-                        background: "#f8fafc",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      {media?.public_url ? (
-                        <img
-                          src={media.public_url}
-                          alt={complaint.title ?? "Complaint image"}
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "cover",
-                            display: "block",
-                          }}
-                        />
-                      ) : (
-                        <span style={{ color: "#64748b", fontSize: "0.9rem" }}>
-                          No image
-                        </span>
-                      )}
-                    </div>
+          <div className={styles.mainContent}>
+            <section className={styles.hero}>
+              <p className={styles.eyebrow}>Authority review workspace</p>
+              <h1 className={styles.title}>Complaint review dashboard</h1>
+              <p className={styles.subtitle}>
+                Review citizen complaints with AI-assisted category, confidence,
+                and priority signals before taking action.
+              </p>
 
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          alignItems: "flex-start",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <h2
-                            style={{
-                              margin: 0,
-                              fontSize: "1.15rem",
-                              fontWeight: 800,
-                              color: "#0f172a",
-                            }}
-                          >
-                            {complaint.title || "Untitled complaint"}
-                          </h2>
-                          <p
-                            style={{
-                              margin: "8px 0 0",
-                              color: "#64748b",
-                              fontSize: "0.92rem",
-                            }}
-                          >
-                            Reporter: {complaint.reporter_name || "Unknown"} • Area: {area}
+              <div className={styles.summaryGrid}>
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Total complaints</p>
+                  <h3 className={styles.summaryValue}>{complaints.length}</h3>
+                  <p className={styles.summaryText}>
+                    Complaint records currently visible in the dashboard
+                  </p>
+                </div>
+
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Workspace role</p>
+                  <h3 className={styles.summaryValue}>Authority</h3>
+                  <p className={styles.summaryText}>
+                    This page is restricted to verified authority users
+                  </p>
+                </div>
+
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Main action</p>
+                  <h3 className={styles.summaryValue}>Review cases</h3>
+                  <p className={styles.summaryText}>
+                    Open each complaint to update status and run AI when needed
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Complaint queue</h2>
+                  <p className={styles.sectionText}>
+                    Browse the latest submitted complaints with compact AI and
+                    priority details.
+                  </p>
+                </div>
+              </div>
+
+              {complaints.length === 0 ? (
+                <div className={styles.emptyBox}>No complaints available yet.</div>
+              ) : (
+                <div className={styles.cardList}>
+                  {complaints.map((complaint) => {
+                    const media = mediaByComplaint.get(complaint.id);
+                    const ai = inferenceByComplaint.get(complaint.id);
+                    const area =
+                      complaint.city_area ||
+                      complaint.upazila ||
+                      complaint.district ||
+                      "Unknown";
+
+                    return (
+                      <article key={complaint.id} className={styles.dashboardCard}>
+                        <div className={styles.thumbWrap}>
+                          {media?.public_url ? (
+                            <img
+                              src={media.public_url}
+                              alt={complaint.title ?? "Complaint image"}
+                              className={styles.thumbImage}
+                            />
+                          ) : (
+                            <div className={styles.noImage}>No image</div>
+                          )}
+                        </div>
+
+                        <div className={styles.cardBody}>
+                          <div className={styles.cardTop}>
+                            <div>
+                              <h3 className={styles.cardTitle}>
+                                {complaint.title || "Untitled complaint"}
+                              </h3>
+                              <p className={styles.metaText}>
+                                Reporter: {complaint.reporter_name || "Unknown"} • Area: {area}
+                              </p>
+                            </div>
+
+                            <span className={statusClass(complaint.status)}>
+                              {complaint.status}
+                            </span>
+                          </div>
+
+                          <p className={styles.bodyText}>
+                            {ai?.summary || complaint.description}
                           </p>
+
+                          <div className={styles.chipRow}>
+                            <span className={styles.chip}>
+                              AI: {ai?.fusion_label || "Pending"}
+                            </span>
+                            <span className={styles.chip}>
+                              Confidence:{" "}
+                              {ai?.fusion_confidence != null
+                                ? `${(ai.fusion_confidence * 100).toFixed(1)}%`
+                                : "Pending"}
+                            </span>
+                            <span className={priorityClass(ai?.priority)}>
+                              Priority: {ai?.priority || "Pending"}
+                            </span>
+                            {ai?.conflict_flag ? (
+                              <span className={styles.chipWarn}>Text/Image conflict</span>
+                            ) : null}
+                          </div>
+
+                          <div className={styles.cardFooter}>
+                            <span className={styles.subtleText}>
+                              Submitted: {formatDate(complaint.created_at)}
+                            </span>
+
+                            <Link
+                              href={`/authority/${complaint.id}`}
+                              className={styles.primaryLink}
+                            >
+                              Open review
+                            </Link>
+                          </div>
                         </div>
-
-                        <div
-                          style={{
-                            padding: "7px 11px",
-                            borderRadius: 999,
-                            fontSize: "0.8rem",
-                            fontWeight: 800,
-                            ...statusChip,
-                          }}
-                        >
-                          {complaint.status}
-                        </div>
-                      </div>
-
-                      <p
-                        style={{
-                          margin: "14px 0 0",
-                          color: "#334155",
-                          lineHeight: 1.65,
-                          fontSize: "0.94rem",
-                        }}
-                      >
-                        {ai?.summary || complaint.description}
-                      </p>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 10,
-                          marginTop: 14,
-                        }}
-                      >
-                        <span
-                          style={{
-                            padding: "7px 10px",
-                            borderRadius: 999,
-                            background: "#ecfeff",
-                            border: "1px solid #bae6fd",
-                            color: "#0f766e",
-                            fontSize: "0.8rem",
-                            fontWeight: 800,
-                          }}
-                        >
-                          AI: {ai?.fusion_label || "Pending"}
-                        </span>
-
-                        <span
-                          style={{
-                            padding: "7px 10px",
-                            borderRadius: 999,
-                            background: "#f8fafc",
-                            border: "1px solid #cbd5e1",
-                            color: "#334155",
-                            fontSize: "0.8rem",
-                            fontWeight: 800,
-                          }}
-                        >
-                          Confidence:{" "}
-                          {ai?.fusion_confidence != null
-                            ? `${(ai.fusion_confidence * 100).toFixed(1)}%`
-                            : "Pending"}
-                        </span>
-
-                        <span
-                          style={{
-                            padding: "7px 10px",
-                            borderRadius: 999,
-                            background:
-                              ai?.priority === "high"
-                                ? "#fef2f2"
-                                : ai?.priority === "medium"
-                                ? "#fffbeb"
-                                : "#f0fdf4",
-                            border:
-                              ai?.priority === "high"
-                                ? "1px solid #fecaca"
-                                : ai?.priority === "medium"
-                                ? "1px solid #fde68a"
-                                : "1px solid #bbf7d0",
-                            color:
-                              ai?.priority === "high"
-                                ? "#991b1b"
-                                : ai?.priority === "medium"
-                                ? "#92400e"
-                                : "#166534",
-                            fontSize: "0.8rem",
-                            fontWeight: 800,
-                          }}
-                        >
-                          Priority: {ai?.priority || "Pending"}
-                        </span>
-
-                        {ai?.conflict_flag ? (
-                          <span
-                            style={{
-                              padding: "7px 10px",
-                              borderRadius: 999,
-                              background: "#fff7ed",
-                              border: "1px solid #fdba74",
-                              color: "#9a3412",
-                              fontSize: "0.8rem",
-                              fontWeight: 800,
-                            }}
-                          >
-                            Text/Image conflict
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <div
-                        style={{
-                          marginTop: 16,
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <span style={{ color: "#64748b", fontSize: "0.86rem" }}>
-                          Submitted: {formatDate(complaint.created_at)}
-                        </span>
-
-                        <Link
-                          href={`/authority/${complaint.id}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            textDecoration: "none",
-                            padding: "10px 14px",
-                            borderRadius: 12,
-                            background: "#0f766e",
-                            border: "1px solid #0f766e",
-                            color: "#ffffff",
-                            fontSize: "0.9rem",
-                            fontWeight: 800,
-                          }}
-                        >
-                          Open review
-                        </Link>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })
-            )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
         </section>
       </div>

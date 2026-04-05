@@ -2,14 +2,19 @@
 
 import { supabase } from "@/lib/supabaseClient";
 
-export default function LogoutButton() {
+type LogoutButtonProps = {
+  className?: string;
+};
+
+export default function LogoutButton({ className = "" }: LogoutButtonProps) {
   return (
     <button
+      className={className}
       onClick={async () => {
         await supabase.auth.signOut();
         window.location.href = "/";
       }}
-      style={{
+      style={!className ? {
         padding: "10px 14px",
         borderRadius: 10,
         border: "1px solid #d1d5db",
@@ -18,7 +23,7 @@ export default function LogoutButton() {
         fontSize: 14,
         fontWeight: 700,
         cursor: "pointer",
-      }}
+      } : undefined}
     >
       Logout
     </button>
