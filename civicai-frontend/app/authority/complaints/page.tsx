@@ -1,0 +1,537 @@
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+import styles from "../authority.module.css";
+import AuthorityDashboardThumb from "../AuthorityDashboardThumb";
+
+type ComplaintRow = {
+    id: string;
+    title: string | null;
+    description: string;
+    reporter_name: string | null;
+    district: string | null;
+    upazila: string | null;
+    city_area: string | null;
+    address_label: string | null;
+    status: string;
+    created_at: string;
+    user_category: string | null;
+    final_category: string | null;
+};
+
+type ComplaintMediaRow = {
+    complaint_id: string;
+    public_url: string | null;
+    created_at: string;
+};
+
+type InferenceRow = {
+    complaint_id: string;
+    fusion_label: string | null;
+    fusion_confidence: number | null;
+    priority: string | null;
+    conflict_flag: boolean | null;
+    model_versions: Record<string, string> | null;
+};
+
+function formatDate(value: string) {
+    return new Intl.DateTimeFormat("en-BD", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "Asia/Dhaka",
+    }).format(new Date(value));
+}
+
+function getAreaName(complaint: ComplaintRow) {
+    return complaint.city_area || complaint.upazila || complaint.district || "Unknown";
+}
+
+function statusClass(status: string) {
+    switch (status) {
+        case "submitted":
+            return styles.badgeSubmitted;
+        case "processing":
+            return styles.badgeProcessing;
+        case "completed":
+        case "resolved":
+            return styles.badgeResolved;
+        case "rejected":
+            return styles.badgeRejected;
+        default:
+            return styles.badge;
+    }
+}
+
+function priorityClass(priority?: string | null) {
+    switch (priority) {
+        case "high":
+            return styles.priorityHigh;
+        case "medium":
+            return styles.priorityMedium;
+        case "low":
+            return styles.priorityLow;
+        default:
+            return styles.chip;
+    }
+}
+
+function reliabilityClass(value?: string | null) {
+    switch (value) {
+        case "reliable":
+            return styles.priorityLow;
+        case "needs_review":
+            return styles.chipWarn;
+        case "low_confidence":
+            return styles.chipWarn;
+        case "conflict_detected":
+            return styles.priorityMedium;
+        case "insufficient_evidence":
+            return styles.priorityHigh;
+        default:
+            return styles.chip;
+    }
+}
+
+function reliabilityLabel(value?: string | null) {
+    switch (value) {
+        case "reliable":
+            return "Reliable";
+        case "needs_review":
+            return "Needs review";
+        case "low_confidence":
+            return "Low confidence";
+        case "conflict_detected":
+            return "Conflict";
+        case "insufficient_evidence":
+            return "Insufficient evidence";
+        default:
+            return "Pending";
+    }
+}
+
+export default async function AuthorityComplaintsPage({
+    searchParams,
+}: {
+    searchParams?: Promise<{
+        q?: string;
+        status?: string;
+        review?: string;
+        page?: string;
+    }>;
+}) {
+    const params = (await searchParams) ?? {};
+    const queryText = (params.q ?? "").trim();
+    const selectedStatus = (params.status ?? "all").trim();
+    const selectedReview = (params.review ?? "all").trim();
+    const currentPage = Math.max(Number(params.page ?? "1") || 1, 1);
+    const pageSize = 12;
+
+    const cookieStore = await cookies();
+
+    const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+            cookies: {
+                get(name: string) {
+                    return cookieStore.get(name)?.value;
+                },
+                set() { },
+                remove() { },
+            },
+        }
+    );
+
+    const {
+        data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+        redirect("/login?next=/authority/complaints");
+    }
+
+    const { data: profile } = await supabase
+        .from("profiles")
+        .select("role, is_verified")
+        .eq("id", user.id)
+        .single();
+
+    if (!profile?.is_verified) {
+        redirect("/login?next=/authority/complaints&verify=1");
+    }
+
+    if (profile.role !== "authority") {
+        redirect("/");
+    }
+
+    const { data: complaintsData, error: complaintsError } = await supabase
+        .from("complaints")
+        .select(`
+      id,
+      title,
+      description,
+      reporter_name,
+      district,
+      upazila,
+      city_area,
+      address_label,
+      status,
+      created_at,
+      user_category,
+      final_category
+    `)
+        .order("created_at", { ascending: false });
+
+    if (complaintsError) {
+        return (
+            <main className={styles.page}>
+                <div className={styles.wrapper}>
+                    <div className={styles.alertBox}>
+                        Failed to load complaints: {complaintsError.message}
+                    </div>
+                </div>
+            </main>
+        );
+    }
+
+    const complaints = (complaintsData ?? []) as ComplaintRow[];
+    const complaintIds = complaints.map((item) => item.id);
+
+    const mediaByComplaint = new Map<string, ComplaintMediaRow>();
+    const inferenceByComplaint = new Map<string, InferenceRow>();
+
+    if (complaintIds.length > 0) {
+        const { data: mediaRows } = await supabase
+            .from("complaint_media")
+            .select("complaint_id, public_url, created_at")
+            .in("complaint_id", complaintIds)
+            .eq("media_type", "image")
+            .order("created_at", { ascending: true });
+
+        const { data: inferenceRows } = await supabase
+            .from("inference_results")
+            .select(`
+        complaint_id,
+        fusion_label,
+        fusion_confidence,
+        priority,
+        conflict_flag,
+        model_versions
+      `)
+            .in("complaint_id", complaintIds);
+
+        for (const row of (mediaRows ?? []) as ComplaintMediaRow[]) {
+            if (!mediaByComplaint.has(row.complaint_id)) {
+                mediaByComplaint.set(row.complaint_id, row);
+            }
+        }
+
+        for (const row of (inferenceRows ?? []) as InferenceRow[]) {
+            inferenceByComplaint.set(row.complaint_id, row);
+        }
+    }
+
+    const filteredComplaints = complaints.filter((complaint) => {
+        const ai = inferenceByComplaint.get(complaint.id);
+        const reliability = ai?.model_versions?.reliability_status ?? null;
+        const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
+        const manualReviewRequired = ai?.model_versions?.manual_review_required === "true";
+
+        const matchesSearch =
+            !queryText ||
+            (complaint.title ?? "").toLowerCase().includes(queryText.toLowerCase()) ||
+            (complaint.reporter_name ?? "").toLowerCase().includes(queryText.toLowerCase());
+
+        const matchesStatus =
+            selectedStatus === "all" || complaint.status === selectedStatus;
+
+        const matchesReview =
+            selectedReview === "all" ||
+            (selectedReview === "manual_review" && manualReviewRequired) ||
+            (selectedReview === "conflict" && (!!ai?.conflict_flag || citizenAiConflict)) ||
+            (selectedReview === "high_priority" && ai?.priority === "high") ||
+            (selectedReview === "reliable" && reliability === "reliable");
+
+        return matchesSearch && matchesStatus && matchesReview;
+    });
+
+    const totalFiltered = filteredComplaints.length;
+    const totalPages = Math.max(Math.ceil(totalFiltered / pageSize), 1);
+    const safePage = Math.min(currentPage, totalPages);
+    const startIndex = (safePage - 1) * pageSize;
+    const paginatedComplaints = filteredComplaints.slice(startIndex, startIndex + pageSize);
+
+    const submittedCount = filteredComplaints.filter((item) => item.status === "submitted").length;
+    const processingCount = filteredComplaints.filter((item) => item.status === "processing").length;
+    const resolvedCount = filteredComplaints.filter(
+        (item) => item.status === "resolved" || item.status === "completed"
+    ).length;
+    const rejectedCount = filteredComplaints.filter((item) => item.status === "rejected").length;
+
+    const prevPage = safePage > 1 ? safePage - 1 : null;
+    const nextPage = safePage < totalPages ? safePage + 1 : null;
+
+    function buildPageHref(page: number) {
+        const search = new URLSearchParams();
+        if (queryText) search.set("q", queryText);
+        if (selectedStatus !== "all") search.set("status", selectedStatus);
+        if (selectedReview !== "all") search.set("review", selectedReview);
+        search.set("page", String(page));
+        return `/authority/complaints?${search.toString()}`;
+    }
+
+    return (
+        <main className={styles.page}>
+            <div className={styles.wrapper}>
+                <section className={styles.pageGrid}>
+                    <aside className={styles.sidebar}>
+                        <div className={styles.sidebarCard}>
+                            <p className={styles.sidebarEyebrow}>Authority workspace</p>
+                            <h2 className={styles.sidebarTitle}>All complaints</h2>
+                            <p className={styles.sidebarText}>
+                                Search, filter, and manage complaint records from one operational work queue.
+                            </p>
+
+                            <nav className={styles.sidebarNav}>
+                                <Link href="/" className={styles.sidebarLink}>
+                                    Back to homepage
+                                </Link>
+                                <Link href="/authority" className={styles.sidebarLink}>
+                                    Authority dashboard
+                                </Link>
+                                <Link href="/authority/complaints" className={styles.sidebarLinkActive}>
+                                    All complaints
+                                </Link>
+                                <Link href="/authority/analytics" className={styles.sidebarLink}>
+                                    Open analytics
+                                </Link>
+                            </nav>
+                        </div>
+                    </aside>
+
+                    <div className={styles.mainContent}>
+                        <section className={styles.hero}>
+                            <p className={styles.eyebrow}>Authority complaint management</p>
+                            <h1 className={styles.title}>All complaints work queue</h1>
+                            <p className={styles.subtitle}>
+                                A structured complaint management page for reviewing new, old, unresolved,
+                                and flagged complaints without overloading the dashboard.
+                            </p>
+
+                            <div className={styles.statStrip}>
+                                <div className={styles.statMiniCard}>
+                                    <p className={styles.statMiniLabel}>Filtered results</p>
+                                    <h3 className={styles.statMiniValue}>{totalFiltered}</h3>
+                                    <p className={styles.statMiniText}>Complaints matching the current filters.</p>
+                                </div>
+
+                                <div className={styles.statMiniCard}>
+                                    <p className={styles.statMiniLabel}>Submitted</p>
+                                    <h3 className={styles.statMiniValue}>{submittedCount}</h3>
+                                    <p className={styles.statMiniText}>New complaints still waiting in queue.</p>
+                                </div>
+
+                                <div className={styles.statMiniCard}>
+                                    <p className={styles.statMiniLabel}>Processing</p>
+                                    <h3 className={styles.statMiniValue}>{processingCount}</h3>
+                                    <p className={styles.statMiniText}>Complaints currently under review.</p>
+                                </div>
+
+                                <div className={styles.statMiniCard}>
+                                    <p className={styles.statMiniLabel}>Resolved / closed</p>
+                                    <h3 className={styles.statMiniValue}>{resolvedCount + rejectedCount}</h3>
+                                    <p className={styles.statMiniText}>Handled complaints in this filtered view.</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section className={styles.section}>
+                            <div className={styles.sectionHeader}>
+                                <div>
+                                    <h2 className={styles.sectionTitle}>Filter complaints</h2>
+                                    <p className={styles.sectionText}>
+                                        Use search and review filters to find unreviewed, urgent, or older complaints.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <form method="get" className={styles.complaintsFilterForm}>
+                                <div className={styles.complaintsFilterGrid}>
+                                    <div>
+                                        <label className={styles.label}>Search</label>
+                                        <input
+                                            type="text"
+                                            name="q"
+                                            defaultValue={queryText}
+                                            placeholder="Search by title or reporter"
+                                            className={styles.input}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className={styles.label}>Status</label>
+                                        <select
+                                            name="status"
+                                            defaultValue={selectedStatus}
+                                            className={styles.input}
+                                        >
+                                            <option value="all">All statuses</option>
+                                            <option value="submitted">Submitted</option>
+                                            <option value="processing">Processing</option>
+                                            <option value="resolved">Resolved</option>
+                                            <option value="completed">Completed</option>
+                                            <option value="rejected">Rejected</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className={styles.label}>Review type</label>
+                                        <select
+                                            name="review"
+                                            defaultValue={selectedReview}
+                                            className={styles.input}
+                                        >
+                                            <option value="all">All complaints</option>
+                                            <option value="manual_review">Manual review</option>
+                                            <option value="conflict">Conflict cases</option>
+                                            <option value="high_priority">High priority</option>
+                                            <option value="reliable">Reliable AI result</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className={styles.complaintsFilterActions}>
+                                    <button type="submit" className={styles.primaryButton}>
+                                        Apply filters
+                                    </button>
+                                    <Link href="/authority/complaints" className={styles.secondaryLink}>
+                                        Clear filters
+                                    </Link>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section className={styles.section}>
+                            <div className={styles.sectionHeader}>
+                                <div>
+                                    <h2 className={styles.sectionTitle}>Complaint list</h2>
+                                    <p className={styles.sectionText}>
+                                        Compact operational list with image preview, review flags, and direct access to complaint detail.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {paginatedComplaints.length === 0 ? (
+                                <div className={styles.emptyBox}>No complaints match the current filters.</div>
+                            ) : (
+                                <div className={styles.complaintsManagementList}>
+                                    {paginatedComplaints.map((complaint) => {
+                                        const ai = inferenceByComplaint.get(complaint.id);
+                                        const media = mediaByComplaint.get(complaint.id);
+                                        const reliability = ai?.model_versions?.reliability_status ?? null;
+                                        const citizenAiConflict =
+                                            ai?.model_versions?.citizen_ai_conflict === "true";
+                                        const manualReviewRequired =
+                                            ai?.model_versions?.manual_review_required === "true";
+
+                                        return (
+                                            <article key={complaint.id} className={styles.complaintsManagementRow}>
+                                                <div className={styles.complaintsManagementThumb}>
+                                                    <AuthorityDashboardThumb
+                                                        src={media?.public_url ?? null}
+                                                        alt={complaint.title || "Complaint image"}
+                                                    />
+                                                </div>
+
+                                                <div className={styles.complaintsManagementMain}>
+                                                    <div className={styles.complaintsManagementTitleRow}>
+                                                        <h3 className={styles.complaintsManagementTitle}>
+                                                            {complaint.title || "Untitled complaint"}
+                                                        </h3>
+                                                        <span className={statusClass(complaint.status)}>
+                                                            {complaint.status}
+                                                        </span>
+                                                    </div>
+
+                                                    <p className={styles.complaintsManagementMeta}>
+                                                        Reporter: {complaint.reporter_name || "Unknown"} • Area:{" "}
+                                                        {getAreaName(complaint)} • Submitted: {formatDate(complaint.created_at)}
+                                                    </p>
+
+                                                    <div className={styles.chipRow}>
+                                                        <span className={styles.chip}>
+                                                            Citizen: {complaint.user_category || "Not provided"}
+                                                        </span>
+                                                        <span className={styles.chip}>
+                                                            Final: {complaint.final_category || "Not set"}
+                                                        </span>
+                                                        <span className={styles.chip}>
+                                                            AI: {ai?.fusion_label || "Pending"}
+                                                        </span>
+                                                        <span className={priorityClass(ai?.priority)}>
+                                                            Priority: {ai?.priority || "Pending"}
+                                                        </span>
+                                                        <span className={reliabilityClass(reliability)}>
+                                                            {reliabilityLabel(reliability)}
+                                                        </span>
+                                                        {manualReviewRequired ? (
+                                                            <span className={styles.chipWarn}>Manual review</span>
+                                                        ) : null}
+                                                        {ai?.conflict_flag ? (
+                                                            <span className={styles.chipWarn}>Text/Image conflict</span>
+                                                        ) : null}
+                                                        {citizenAiConflict ? (
+                                                            <span className={styles.chipWarn}>Citizen/AI mismatch</span>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+
+                                                <div className={styles.complaintsManagementAction}>
+                                                    <Link
+                                                        href={`/authority/${complaint.id}`}
+                                                        className={styles.primaryLink}
+                                                    >
+                                                        Open review
+                                                    </Link>
+                                                </div>
+                                            </article>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            <div className={styles.complaintsPagination}>
+                                <div className={styles.complaintsPaginationInfo}>
+                                    Page {safePage} of {totalPages}
+                                </div>
+
+                                <div className={styles.complaintsPaginationActions}>
+                                    {prevPage ? (
+                                        <Link href={buildPageHref(prevPage)} className={styles.secondaryLink}>
+                                            Previous
+                                        </Link>
+                                    ) : (
+                                        <span className={styles.complaintsPaginationDisabled}>Previous</span>
+                                    )}
+
+                                    {nextPage ? (
+                                        <Link href={buildPageHref(nextPage)} className={styles.secondaryLink}>
+                                            Next
+                                        </Link>
+                                    ) : (
+                                        <span className={styles.complaintsPaginationDisabled}>Next</span>
+                                    )}
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </section>
+            </div>
+        </main>
+    );
+}

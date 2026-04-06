@@ -678,3 +678,10 @@
     height: 320px;
   }
 }
+
+.fieldHint {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #94a3b8;
+}

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import styles from "./authority.module.css";
+import AuthorityDashboardThumb from "./AuthorityDashboardThumb";
 
 type ComplaintRow = {
   id: string;
@@ -15,6 +16,9 @@ type ComplaintRow = {
   address_label: string | null;
   status: string;
   created_at: string;
+  user_category: string | null;
+  final_category: string | null;
+  category_source: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -31,13 +35,25 @@ type InferenceRow = {
   priority_score: number | null;
   conflict_flag: boolean | null;
   summary: string | null;
+  model_versions: Record<string, string> | null;
+};
+
+type RankedItem = {
+  label: string;
+  count: number;
+  share: number;
 };
 
 function formatDate(value: string) {
-  return new Date(value).toLocaleString("en-BD", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return new Intl.DateTimeFormat("en-BD", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Dhaka",
+  }).format(new Date(value));
 }
 
 function statusClass(status: string) {
@@ -69,6 +85,205 @@ function priorityClass(priority?: string | null) {
   }
 }
 
+function reliabilityClass(value?: string | null) {
+  switch (value) {
+    case "reliable":
+      return styles.priorityLow;
+    case "needs_review":
+      return styles.chipWarn;
+    case "low_confidence":
+      return styles.chipWarn;
+    case "conflict_detected":
+      return styles.priorityMedium;
+    case "insufficient_evidence":
+      return styles.priorityHigh;
+    default:
+      return styles.chip;
+  }
+}
+
+function reliabilityLabel(value?: string | null) {
+  switch (value) {
+    case "reliable":
+      return "Reliable";
+    case "needs_review":
+      return "Needs review";
+    case "low_confidence":
+      return "Low confidence";
+    case "conflict_detected":
+      return "Conflict";
+    case "insufficient_evidence":
+      return "Insufficient evidence";
+    default:
+      return "Pending";
+  }
+}
+
+function getAreaName(complaint: ComplaintRow) {
+  return complaint.city_area || complaint.upazila || complaint.district || "Unknown";
+}
+
+function niceLabel(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function countMapToSortedList(
+  map: Map<string, number>,
+  total: number,
+  limit = 6
+): RankedItem[] {
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: total > 0 ? (count / total) * 100 : 0,
+    }));
+}
+
+function MetricCard({
+  label,
+  value,
+  text,
+}: {
+  label: string;
+  value: string | number;
+  text: string;
+}) {
+  return (
+    <div className={styles.statMiniCard}>
+      <p className={styles.statMiniLabel}>{label}</p>
+      <h3 className={styles.statMiniValue}>{value}</h3>
+      <p className={styles.statMiniText}>{text}</p>
+    </div>
+  );
+}
+
+function BarChart({
+  title,
+  items,
+  fillClass,
+}: {
+  title: string;
+  items: RankedItem[];
+  fillClass: string;
+}) {
+  const height = Math.max(220, items.length * 46 + 26);
+  const max = Math.max(...items.map((item) => item.count), 1);
+
+  return (
+    <article className={styles.analyticsChartCard}>
+      <p className={styles.kvLabel}>{title}</p>
+
+      {items.length === 0 ? (
+        <p className={styles.kvValue}>No data available.</p>
+      ) : (
+        <svg
+          viewBox={`0 0 700 ${height}`}
+          width="100%"
+          height="100%"
+          role="img"
+          aria-label={title}
+          className={styles.analyticsChartSvg}
+        >
+          {items.map((item, index) => {
+            const y = 34 + index * 46;
+            const barWidth = (item.count / max) * 320;
+
+            return (
+              <g key={item.label}>
+                <text x="16" y={y} className={styles.analyticsChartLabel}>
+                  {niceLabel(item.label)}
+                </text>
+
+                <rect
+                  x="250"
+                  y={y - 14}
+                  width="360"
+                  height="12"
+                  rx="999"
+                  className={styles.analyticsChartTrack}
+                />
+
+                <rect
+                  x="250"
+                  y={y - 14}
+                  width={barWidth}
+                  height="12"
+                  rx="999"
+                  className={fillClass}
+                />
+
+                <text
+                  x="680"
+                  y={y}
+                  textAnchor="end"
+                  className={styles.analyticsChartValue}
+                >
+                  {item.count}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      )}
+    </article>
+  );
+}
+
+function InboxPanel({
+  title,
+  subtitle,
+  items,
+  emptyText,
+  badgeClass,
+}: {
+  title: string;
+  subtitle: string;
+  items: Array<{
+    id: string;
+    title: string;
+    meta: string;
+    badge: string;
+  }>;
+  emptyText: string;
+  badgeClass?: string;
+}) {
+  return (
+    <article className={styles.dashboardInboxCard}>
+      <div className={styles.dashboardInboxHeader}>
+        <div>
+          <h3 className={styles.dashboardInboxTitle}>{title}</h3>
+          <p className={styles.dashboardInboxText}>{subtitle}</p>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className={styles.emptyBox}>{emptyText}</div>
+      ) : (
+        <div className={styles.dashboardInboxList}>
+          {items.map((item) => (
+            <Link
+              key={item.id}
+              href={`/authority/${item.id}`}
+              className={styles.dashboardInboxItem}
+            >
+              <div className={styles.dashboardInboxItemTop}>
+                <h4 className={styles.dashboardInboxItemTitle}>{item.title}</h4>
+                <span className={badgeClass || styles.chip}>{item.badge}</span>
+              </div>
+              <p className={styles.dashboardInboxItemMeta}>{item.meta}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
 export default async function AuthorityPage() {
   const cookieStore = await cookies();
 
@@ -80,8 +295,8 @@ export default async function AuthorityPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -120,7 +335,10 @@ export default async function AuthorityPage() {
       city_area,
       address_label,
       status,
-      created_at
+      created_at,
+      user_category,
+      final_category,
+      category_source
     `)
     .order("created_at", { ascending: false });
 
@@ -139,8 +357,8 @@ export default async function AuthorityPage() {
   const complaints = (complaintsData ?? []) as ComplaintRow[];
   const complaintIds = complaints.map((item) => item.id);
 
-  let mediaByComplaint = new Map<string, ComplaintMediaRow>();
-  let inferenceByComplaint = new Map<string, InferenceRow>();
+  const mediaByComplaint = new Map<string, ComplaintMediaRow>();
+  const inferenceByComplaint = new Map<string, InferenceRow>();
 
   if (complaintIds.length > 0) {
     const { data: mediaRows } = await supabase
@@ -159,7 +377,8 @@ export default async function AuthorityPage() {
         priority,
         priority_score,
         conflict_flag,
-        summary
+        summary,
+        model_versions
       `)
       .in("complaint_id", complaintIds);
 
@@ -174,6 +393,73 @@ export default async function AuthorityPage() {
     }
   }
 
+  const totalComplaints = complaints.length;
+  const submittedCount = complaints.filter((item) => item.status === "submitted").length;
+  const processingCount = complaints.filter((item) => item.status === "processing").length;
+  const resolvedCount = complaints.filter(
+    (item) => item.status === "resolved" || item.status === "completed"
+  ).length;
+  const rejectedCount = complaints.filter((item) => item.status === "rejected").length;
+
+  const highPriorityCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    return ai?.priority === "high";
+  }).length;
+
+  const manualReviewCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    return ai?.model_versions?.manual_review_required === "true";
+  }).length;
+
+  const conflictCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
+    return !!ai?.conflict_flag || citizenAiConflict;
+  }).length;
+
+  const categoryCounts = new Map<string, number>();
+  const areaCounts = new Map<string, number>();
+
+  for (const complaint of complaints) {
+    const category =
+      complaint.final_category ||
+      complaint.user_category ||
+      inferenceByComplaint.get(complaint.id)?.fusion_label ||
+      "Uncategorized";
+
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+
+    const area = getAreaName(complaint);
+    areaCounts.set(area, (areaCounts.get(area) ?? 0) + 1);
+  }
+
+  const topCategories = countMapToSortedList(categoryCounts, totalComplaints, 5);
+  const topAreas = countMapToSortedList(areaCounts, totalComplaints, 5);
+
+  const statusChartItems: RankedItem[] = [
+    { label: "submitted", count: submittedCount, share: 0 },
+    { label: "processing", count: processingCount, share: 0 },
+    { label: "resolved", count: resolvedCount, share: 0 },
+    { label: "rejected", count: rejectedCount, share: 0 },
+  ].filter((item) => item.count > 0);
+
+  const manualReviewComplaints = complaints
+    .filter((complaint) => {
+      const ai = inferenceByComplaint.get(complaint.id);
+      return ai?.model_versions?.manual_review_required === "true";
+    })
+    .slice(0, 3);
+
+  const conflictComplaints = complaints
+    .filter((complaint) => {
+      const ai = inferenceByComplaint.get(complaint.id);
+      const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
+      return !!ai?.conflict_flag || citizenAiConflict;
+    })
+    .slice(0, 3);
+
+  const recentComplaints = complaints.slice(0, 6);
+
   return (
     <main className={styles.page}>
       <div className={styles.wrapper}>
@@ -183,8 +469,8 @@ export default async function AuthorityPage() {
               <p className={styles.sidebarEyebrow}>Authority workspace</p>
               <h2 className={styles.sidebarTitle}>Dashboard</h2>
               <p className={styles.sidebarText}>
-                Review complaint submissions, inspect AI results, and open each
-                case for a full decision workflow.
+                Review complaint submissions, inspect AI reliability, and focus on
+                cases that require manual authority attention.
               </p>
 
               <nav className={styles.sidebarNav}>
@@ -194,144 +480,277 @@ export default async function AuthorityPage() {
                 <Link href="/authority" className={styles.sidebarLinkActive}>
                   Authority dashboard
                 </Link>
+                <Link href="/authority/complaints" className={styles.sidebarLink}>
+                  Manage complaints
+                </Link>
+
+                <Link href="/authority/analytics" className={styles.sidebarLink}>
+                  Open analytics
+                </Link>
+
+
               </nav>
 
-              <div className={styles.sidebarHelp}>
-                <p className={styles.sidebarHelpTitle}>Review priorities</p>
-                <ul className={styles.sidebarHelpList}>
-                  <li>Check AI label and confidence</li>
-                  <li>Review image and complaint summary</li>
-                  <li>Update status and resolution notes</li>
-                  <li>Use detail page for full complaint review</li>
-                </ul>
-              </div>
             </div>
           </aside>
 
           <div className={styles.mainContent}>
             <section className={styles.hero}>
               <p className={styles.eyebrow}>Authority review workspace</p>
-              <h1 className={styles.title}>Complaint review dashboard</h1>
+              <h1 className={styles.title}>Complaint operations dashboard</h1>
               <p className={styles.subtitle}>
-                Review citizen complaints with AI-assisted category, confidence,
-                and priority signals before taking action.
+                A cleaner authority dashboard for day-to-day monitoring, urgent review,
+                and quick movement into analytics or complaint detail pages.
               </p>
 
-              <div className={styles.summaryGrid}>
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Total complaints</p>
-                  <h3 className={styles.summaryValue}>{complaints.length}</h3>
-                  <p className={styles.summaryText}>
-                    Complaint records currently visible in the dashboard
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Workspace role</p>
-                  <h3 className={styles.summaryValue}>Authority</h3>
-                  <p className={styles.summaryText}>
-                    This page is restricted to verified authority users
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Main action</p>
-                  <h3 className={styles.summaryValue}>Review cases</h3>
-                  <p className={styles.summaryText}>
-                    Open each complaint to update status and run AI when needed
-                  </p>
-                </div>
+              <div className={styles.statStrip}>
+                <MetricCard
+                  label="Total complaints"
+                  value={totalComplaints}
+                  text="Complaint records currently visible in the dashboard."
+                />
+                <MetricCard
+                  label="Manual review"
+                  value={manualReviewCount}
+                  text="Cases flagged by the backend as requiring human review."
+                />
+                <MetricCard
+                  label="Conflict cases"
+                  value={conflictCount}
+                  text="Text-image disagreement or citizen-AI mismatch cases."
+                />
+                <MetricCard
+                  label="High priority"
+                  value={highPriorityCount}
+                  text="Complaints marked high by the current AI priority logic."
+                />
               </div>
             </section>
 
             <section className={styles.section}>
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Complaint queue</h2>
+                  <h2 className={styles.sectionTitle}>Operations overview</h2>
                   <p className={styles.sectionText}>
-                    Browse the latest submitted complaints with compact AI and
-                    priority details.
+                    A quick command-center view of complaint status and top complaint categories.
+                  </p>
+                </div>
+
+                <div className={styles.complaintsFilterActions}>
+                  <Link href="/authority/complaints" className={styles.primaryLink}>
+                    Manage complaints
+                  </Link>
+
+                  <Link href="/authority/analytics" className={styles.secondaryLink}>
+                    Open analytics
+                  </Link>
+                </div>
+
+              </div>
+
+              <div className={styles.analyticsChartGrid}>
+                <BarChart
+                  title="Complaint status distribution"
+                  items={statusChartItems}
+                  fillClass={styles.analyticsChartFillTeal}
+                />
+
+                <BarChart
+                  title="Top complaint categories"
+                  items={topCategories}
+                  fillClass={styles.analyticsChartFillBlue}
+                />
+              </div>
+
+              <div className={styles.statStrip}>
+                <MetricCard
+                  label="Submitted"
+                  value={submittedCount}
+                  text="Newly submitted complaints waiting in queue."
+                />
+                <MetricCard
+                  label="Processing"
+                  value={processingCount}
+                  text="Cases currently under authority handling."
+                />
+                <MetricCard
+                  label="Resolved"
+                  value={resolvedCount}
+                  text="Complaints completed or marked resolved."
+                />
+                <MetricCard
+                  label="Rejected"
+                  value={rejectedCount}
+                  text="Complaints rejected after authority review."
+                />
+              </div>
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Priority inbox</h2>
+                  <p className={styles.sectionText}>
+                    Compact previews for urgent authority attention instead of full long queues.
                   </p>
                 </div>
               </div>
 
-              {complaints.length === 0 ? (
+              <div className={styles.dashboardInboxGrid}>
+                <InboxPanel
+                  title="Manual review"
+                  subtitle="Complaints where AI suggestions should not be used without human verification."
+                  emptyText="No manual-review complaints right now."
+                  badgeClass={styles.chipWarn}
+                  items={manualReviewComplaints.map((complaint) => {
+                    const ai = inferenceByComplaint.get(complaint.id);
+                    const reliability = ai?.model_versions?.reliability_status ?? null;
+
+                    return {
+                      id: complaint.id,
+                      title: complaint.title || "Untitled complaint",
+                      meta: `${getAreaName(complaint)} • ${formatDate(
+                        complaint.created_at
+                      )} • ${reliabilityLabel(reliability)}`,
+                      badge: "Review",
+                    };
+                  })}
+                />
+
+                <InboxPanel
+                  title="Conflict cases"
+                  subtitle="Complaints with category mismatch or signal disagreement that need closer inspection."
+                  emptyText="No conflict cases right now."
+                  badgeClass={styles.priorityMedium}
+                  items={conflictComplaints.map((complaint) => {
+                    const ai = inferenceByComplaint.get(complaint.id);
+
+                    return {
+                      id: complaint.id,
+                      title: complaint.title || "Untitled complaint",
+                      meta: `${getAreaName(complaint)} • ${formatDate(
+                        complaint.created_at
+                      )} • AI: ${ai?.fusion_label || "Pending"}`,
+                      badge: "Conflict",
+                    };
+                  })}
+                />
+
+                <article className={styles.dashboardInboxCard}>
+                  <div className={styles.dashboardInboxHeader}>
+                    <div>
+                      <h3 className={styles.dashboardInboxTitle}>Area hotspots</h3>
+                      <p className={styles.dashboardInboxText}>
+                        Most affected areas based on the latest complaint distribution.
+                      </p>
+                    </div>
+                  </div>
+
+                  {topAreas.length === 0 ? (
+                    <div className={styles.emptyBox}>No area data available.</div>
+                  ) : (
+                    <div className={styles.dashboardInboxList}>
+                      {topAreas.map((item) => (
+                        <div key={item.label} className={styles.dashboardInboxStaticItem}>
+                          <div className={styles.dashboardInboxItemTop}>
+                            <h4 className={styles.dashboardInboxItemTitle}>{item.label}</h4>
+                            <span className={styles.chip}>{item.count}</span>
+                          </div>
+                          <p className={styles.dashboardInboxItemMeta}>
+                            {item.share.toFixed(1)}% of total complaints
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              </div>
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Recent complaints</h2>
+                  <p className={styles.sectionText}>
+                    A shorter recent complaint preview list for daily review without crowding the dashboard.
+                  </p>
+                  <div className={styles.complaintsFilterActions}>
+                    <Link href="/authority/complaints" className={styles.primaryLink}>
+                      Manage complaints
+                    </Link>
+
+                    <Link href="/authority/analytics" className={styles.secondaryLink}>
+                      Open analytics
+                    </Link>
+                  </div>
+
+                </div>
+              </div>
+
+              {recentComplaints.length === 0 ? (
                 <div className={styles.emptyBox}>No complaints available yet.</div>
               ) : (
-                <div className={styles.cardList}>
-                  {complaints.map((complaint) => {
-                    const media = mediaByComplaint.get(complaint.id);
+                <div className={styles.dashboardQueueList}>
+                  {recentComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
-                    const area =
-                      complaint.city_area ||
-                      complaint.upazila ||
-                      complaint.district ||
-                      "Unknown";
+                    const media = mediaByComplaint.get(complaint.id);
+                    const reliability = ai?.model_versions?.reliability_status ?? null;
+                    const citizenAiConflict =
+                      ai?.model_versions?.citizen_ai_conflict === "true";
 
                     return (
-                      <article key={complaint.id} className={styles.dashboardCard}>
-                        <div className={styles.thumbWrap}>
-                          {media?.public_url ? (
-                            <img
-                              src={media.public_url}
-                              alt={complaint.title ?? "Complaint image"}
-                              className={styles.thumbImage}
-                            />
-                          ) : (
-                            <div className={styles.noImage}>No image</div>
-                          )}
+                      <article key={complaint.id} className={styles.dashboardQueueRow}>
+                        <div className={styles.dashboardQueueThumb}>
+                          <AuthorityDashboardThumb
+                            src={media?.public_url ?? null}
+                            alt={complaint.title || "Complaint image"}
+                          />
                         </div>
 
-                        <div className={styles.cardBody}>
-                          <div className={styles.cardTop}>
-                            <div>
-                              <h3 className={styles.cardTitle}>
-                                {complaint.title || "Untitled complaint"}
-                              </h3>
-                              <p className={styles.metaText}>
-                                Reporter: {complaint.reporter_name || "Unknown"} • Area: {area}
-                              </p>
-                            </div>
-
+                        <div className={styles.dashboardQueueMain}>
+                          <div className={styles.dashboardQueueTitleRow}>
+                            <h3 className={styles.dashboardQueueTitle}>
+                              {complaint.title || "Untitled complaint"}
+                            </h3>
                             <span className={statusClass(complaint.status)}>
                               {complaint.status}
                             </span>
                           </div>
 
-                          <p className={styles.bodyText}>
-                            {ai?.summary || complaint.description}
+                          <p className={styles.dashboardQueueMeta}>
+                            Reporter: {complaint.reporter_name || "Unknown"} • Area:{" "}
+                            {getAreaName(complaint)} • Submitted: {formatDate(complaint.created_at)}
                           </p>
 
                           <div className={styles.chipRow}>
                             <span className={styles.chip}>
-                              AI: {ai?.fusion_label || "Pending"}
+                              Final: {complaint.final_category || "Not set"}
                             </span>
                             <span className={styles.chip}>
-                              Confidence:{" "}
-                              {ai?.fusion_confidence != null
-                                ? `${(ai.fusion_confidence * 100).toFixed(1)}%`
-                                : "Pending"}
+                              AI: {ai?.fusion_label || "Pending"}
                             </span>
                             <span className={priorityClass(ai?.priority)}>
                               Priority: {ai?.priority || "Pending"}
                             </span>
+                            <span className={reliabilityClass(reliability)}>
+                              {reliabilityLabel(reliability)}
+                            </span>
                             {ai?.conflict_flag ? (
                               <span className={styles.chipWarn}>Text/Image conflict</span>
                             ) : null}
+                            {citizenAiConflict ? (
+                              <span className={styles.chipWarn}>Citizen/AI mismatch</span>
+                            ) : null}
                           </div>
+                        </div>
 
-                          <div className={styles.cardFooter}>
-                            <span className={styles.subtleText}>
-                              Submitted: {formatDate(complaint.created_at)}
-                            </span>
-
-                            <Link
-                              href={`/authority/${complaint.id}`}
-                              className={styles.primaryLink}
-                            >
-                              Open review
-                            </Link>
-                          </div>
+                        <div className={styles.dashboardQueueAction}>
+                          <Link
+                            href={`/authority/${complaint.id}`}
+                            className={styles.primaryLink}
+                          >
+                            Open review
+                          </Link>
                         </div>
                       </article>
                     );

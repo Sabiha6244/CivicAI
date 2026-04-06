@@ -31,6 +31,21 @@ type AreaCenter = {
 const MAX_IMAGE_SIZE_MB = 8;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 
+const CITIZEN_CATEGORY_OPTIONS = [
+  "Garbage / Waste",
+  "Streetlights",
+  "Roads / Footpaths",
+  "Traffic / Road Safety",
+  "Water Supply",
+  "Sewerage / Drainage",
+  "Electricity",
+  "Public Toilets",
+  "Parks / Trees / Lakes",
+  "Crime / Safety",
+  "Community Services",
+  "Other",
+] as const;
+
 function sanitizeFileName(name: string) {
   return name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "").toLowerCase();
 }
@@ -48,6 +63,7 @@ export default function ReportForm({ userId }: { userId: string }) {
   const [lng, setLng] = useState<number | null>(null);
 
   const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
 
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -145,6 +161,7 @@ export default function ReportForm({ userId }: { userId: string }) {
     setLat(null);
     setLng(null);
     setTitle("");
+    setCategory("");
     setDescription("");
     setImageFile(null);
     setImagePreviewUrl(null);
@@ -240,6 +257,7 @@ export default function ReportForm({ userId }: { userId: string }) {
       !district ||
       !locationDetails.trim() ||
       !title.trim() ||
+      !category ||
       !description.trim() ||
       lat === null ||
       lng === null;
@@ -248,7 +266,7 @@ export default function ReportForm({ userId }: { userId: string }) {
 
     if (missingBase || missingAreaSelection) {
       setMsgType("error");
-      setMsg("Please complete all required fields and mark the complaint location on the map.");
+      setMsg("Please complete all required fields, choose a category, and mark the complaint location on the map.");
       return;
     }
 
@@ -282,6 +300,9 @@ export default function ReportForm({ userId }: { userId: string }) {
         lng,
         title: title.trim(),
         description: description.trim(),
+        user_category: category,
+        final_category: category,
+        category_source: "citizen",
         status: "submitted",
       })
       .select("id")
@@ -326,7 +347,7 @@ export default function ReportForm({ userId }: { userId: string }) {
               <p className={styles.sidebarEyebrow}>Citizen workspace</p>
               <h2 className={styles.sidebarTitle}>Report page</h2>
               <p className={styles.sidebarText}>
-                Submit a clear complaint with location, description, and image so
+                Submit a clear complaint with location, description, category, and image so
                 it can be reviewed faster and more accurately.
               </p>
 
@@ -343,6 +364,7 @@ export default function ReportForm({ userId }: { userId: string }) {
                 <p className={styles.sidebarHelpTitle}>Tips for better reports</p>
                 <ul className={styles.sidebarHelpList}>
                   <li>Use a short and clear title</li>
+                  <li>Choose the closest matching category</li>
                   <li>Mark the exact problem location</li>
                   <li>Add landmarks in location details</li>
                   <li>Upload a helpful image if available</li>
@@ -356,7 +378,7 @@ export default function ReportForm({ userId }: { userId: string }) {
               <p className={styles.eyebrow}>Verified complaint reporting</p>
               <h1 className={styles.title}>Report a civic complaint</h1>
               <p className={styles.subtitle}>
-                Share the issue location, a clear description, and an optional image so the
+                Share the issue location, category, a clear description, and an optional image so the
                 complaint can be reviewed faster and more accurately.
               </p>
             </section>
@@ -371,18 +393,18 @@ export default function ReportForm({ userId }: { userId: string }) {
               </div>
 
               <div className={styles.summaryCard}>
-                <p className={styles.summaryLabel}>Map flow</p>
-                <h3 className={styles.summaryValue}>Select then mark</h3>
+                <p className={styles.summaryLabel}>Category</p>
+                <h3 className={styles.summaryValue}>Citizen selected</h3>
                 <p className={styles.summaryText}>
-                  First choose the area, then click the exact problem point on the map.
+                  Choose the closest complaint category so authorities can review it faster.
                 </p>
               </div>
 
               <div className={styles.summaryCard}>
-                <p className={styles.summaryLabel}>Recommended</p>
-                <h3 className={styles.summaryValue}>Image + details</h3>
+                <p className={styles.summaryLabel}>Map flow</p>
+                <h3 className={styles.summaryValue}>Select then mark</h3>
                 <p className={styles.summaryText}>
-                  A clear description and image help authorities review the issue faster.
+                  First choose the area, then click the exact problem point on the map.
                 </p>
               </div>
             </div>
@@ -427,6 +449,26 @@ export default function ReportForm({ userId }: { userId: string }) {
                         className={styles.input}
                         disabled={loading}
                       />
+                    </div>
+
+                    <div className={styles.inputGroup}>
+                      <label className={styles.label}>Complaint category</label>
+                      <select
+                        value={category}
+                        onChange={(e) => setCategory(e.target.value)}
+                        className={styles.input}
+                        disabled={loading}
+                      >
+                        <option value="">Select category</option>
+                        {CITIZEN_CATEGORY_OPTIONS.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                      <p className={styles.fieldHint}>
+                        Choose the category that best matches the issue. Authorities can correct it later if needed.
+                      </p>
                     </div>
                   </div>
                 </div>

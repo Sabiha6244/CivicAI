@@ -9,17 +9,42 @@ type Props = {
   currentStatus: string;
   currentResolutionNote: string | null;
   resolvedAt: string | null;
+  currentFinalCategory?: string | null;
 };
+
+const CATEGORY_OPTIONS = [
+  "Animal Husbandry",
+  "Certificates",
+  "Community Infrastructure and Services",
+  "Crime and Safety",
+  "Electricity and Power Supply",
+  "Garbage and Unsanitary Practices",
+  "Lakes",
+  "Mobility - Roads, Footpaths and Infrastructure",
+  "Mobility - Roads, Public transport",
+  "Parks & Recreation",
+  "Pollution",
+  "Public Toilets",
+  "Sewerage Systems",
+  "Storm Water Drains",
+  "Streetlights",
+  "Traffic and Road Safety",
+  "Trees and Saplings",
+  "Water Supply and Services",
+  "Other",
+] as const;
 
 export default function AuthorityActionPanel({
   complaintId,
   currentStatus,
   currentResolutionNote,
   resolvedAt,
+  currentFinalCategory,
 }: Props) {
   const router = useRouter();
   const [status, setStatus] = useState(currentStatus);
   const [resolutionNote, setResolutionNote] = useState(currentResolutionNote ?? "");
+  const [finalCategory, setFinalCategory] = useState(currentFinalCategory ?? "");
   const [saving, setSaving] = useState(false);
   const [runningAi, setRunningAi] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -38,6 +63,7 @@ export default function AuthorityActionPanel({
         body: JSON.stringify({
           status,
           resolution_note: resolutionNote,
+          final_category: finalCategory || null,
         }),
       });
 
@@ -74,7 +100,7 @@ export default function AuthorityActionPanel({
       }
 
       setMsgType("info");
-      setMsg("AI processing completed successfully.");
+      setMsg("AI processing completed successfully. Review the updated AI assessment before taking action.");
       router.refresh();
     } catch (error) {
       setMsgType("error");
@@ -89,6 +115,14 @@ export default function AuthorityActionPanel({
       <h2 className={styles.panelTitle}>Authority action panel</h2>
 
       <div className={styles.formGrid}>
+        <div className={styles.noteBox}>
+          <p className={styles.kvLabel}>Authority guidance</p>
+          <p className={styles.kvValue}>
+            AI output is advisory only. Confirm the complaint details, evidence,
+            and reliability indicators before saving the final operational decision.
+          </p>
+        </div>
+
         <div className={styles.buttonGrid}>
           <button
             type="button"
@@ -126,6 +160,23 @@ export default function AuthorityActionPanel({
         </div>
 
         <div>
+          <label className={styles.label}>Final category</label>
+          <select
+            value={finalCategory}
+            onChange={(e) => setFinalCategory(e.target.value)}
+            disabled={saving || runningAi}
+            className={styles.input}
+          >
+            <option value="">Select final category</option>
+            {CATEGORY_OPTIONS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
           <label className={styles.label}>Resolution note</label>
           <textarea
             value={resolutionNote}
@@ -140,6 +191,14 @@ export default function AuthorityActionPanel({
           <p className={styles.kvLabel}>Current resolved time</p>
           <p className={styles.kvValue}>
             {resolvedAt ? new Date(resolvedAt).toLocaleString("en-BD") : "Not resolved yet"}
+          </p>
+        </div>
+
+        <div className={styles.noteBox}>
+          <p className={styles.kvLabel}>Recommended workflow</p>
+          <p className={styles.kvValue}>
+            Run AI when needed, inspect category mismatch or conflict warnings,
+            confirm the final category manually, then save the final human decision.
           </p>
         </div>
 

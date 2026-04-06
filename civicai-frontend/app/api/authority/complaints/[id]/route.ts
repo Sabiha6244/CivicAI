@@ -7,6 +7,7 @@ type ComplaintStatus = "submitted" | "processing" | "completed" | "resolved" | "
 type UpdateBody = {
   status?: ComplaintStatus;
   resolution_note?: string | null;
+  final_category?: string | null;
 };
 
 export async function PATCH(
@@ -19,8 +20,13 @@ export async function PATCH(
 
     const nextStatus = body.status;
     const resolutionNoteRaw = body.resolution_note;
+    const finalCategoryRaw = body.final_category;
+
     const resolutionNote =
       typeof resolutionNoteRaw === "string" ? resolutionNoteRaw.trim() : null;
+
+    const finalCategory =
+      typeof finalCategoryRaw === "string" ? finalCategoryRaw.trim() : null;
 
     if (
       !nextStatus ||
@@ -75,6 +81,8 @@ export async function PATCH(
       updated_at: string;
       resolved_at?: string | null;
       resolution_note?: string | null;
+      final_category?: string | null;
+      category_source?: string;
     } = {
       status: nextStatus,
       updated_at: new Date().toISOString(),
@@ -91,11 +99,18 @@ export async function PATCH(
       }
     }
 
+    if (finalCategoryRaw !== undefined) {
+      updatePayload.final_category = finalCategory || null;
+      updatePayload.category_source = finalCategory ? "authority" : "authority";
+    }
+
     const { data, error } = await supabase
       .from("complaints")
       .update(updatePayload)
       .eq("id", id)
-      .select("id, status, resolved_at, resolution_note, updated_at")
+      .select(
+        "id, status, resolved_at, resolution_note, updated_at, final_category, category_source"
+      )
       .single();
 
     if (error) {

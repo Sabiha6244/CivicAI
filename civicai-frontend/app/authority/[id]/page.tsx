@@ -23,6 +23,9 @@ type ComplaintDetail = {
   resolution_note: string | null;
   resolved_at: string | null;
   created_at: string;
+  user_category: string | null;
+  final_category: string | null;
+  category_source: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -93,6 +96,55 @@ function priorityClass(priority?: string | null) {
   }
 }
 
+function reliabilityLabel(value?: string | null) {
+  switch (value) {
+    case "reliable":
+      return "Reliable AI result";
+    case "needs_review":
+      return "Needs review";
+    case "low_confidence":
+      return "Low confidence";
+    case "conflict_detected":
+      return "Conflict detected";
+    case "insufficient_evidence":
+      return "Insufficient evidence";
+    default:
+      return "Not available";
+  }
+}
+
+function reliabilityClass(value?: string | null) {
+  switch (value) {
+    case "reliable":
+      return styles.priorityLow;
+    case "needs_review":
+      return styles.chipWarn;
+    case "low_confidence":
+      return styles.chipWarn;
+    case "conflict_detected":
+      return styles.priorityMedium;
+    case "insufficient_evidence":
+      return styles.priorityHigh;
+    default:
+      return styles.chip;
+  }
+}
+
+function parseQualityFlags(modelVersions: Record<string, string> | null) {
+  const raw = modelVersions?.quality_flags;
+  if (!raw || raw === "none") return [];
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function prettifyFlag(flag: string) {
+  return flag
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
 export default async function AuthorityComplaintDetailPage({
   params,
 }: {
@@ -109,8 +161,8 @@ export default async function AuthorityComplaintDetailPage({
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -155,7 +207,10 @@ export default async function AuthorityComplaintDetailPage({
       status,
       resolution_note,
       resolved_at,
-      created_at
+      created_at,
+      user_category,
+      final_category,
+      category_source
     `)
     .eq("id", id)
     .single();
@@ -201,6 +256,11 @@ export default async function AuthorityComplaintDetailPage({
   const media = ((mediaRows ?? [])[0] ?? null) as ComplaintMediaRow | null;
   const ai = (inferenceRow ?? null) as InferenceRow | null;
 
+  const reliabilityStatus = ai?.model_versions?.reliability_status ?? null;
+  const manualReviewRequired = ai?.model_versions?.manual_review_required === "true";
+  const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
+  const qualityFlags = parseQualityFlags(ai?.model_versions ?? null);
+
   return (
     <main className={styles.page}>
       <div className={styles.wrapper}>
@@ -232,7 +292,7 @@ export default async function AuthorityComplaintDetailPage({
                   <li>Check complaint details and location</li>
                   <li>Inspect uploaded and detected images</li>
                   <li>Review AI labels and consistency</li>
-                  <li>Save status and resolution updates</li>
+                  <li>Confirm final handling manually</li>
                 </ul>
               </div>
             </div>
@@ -338,6 +398,52 @@ export default async function AuthorityComplaintDetailPage({
                 </article>
 
                 <article className={styles.panel}>
+                  <h2 className={styles.panelTitle}>Category and review source</h2>
+
+                  <div className={styles.panelBody}>
+                    <div className={styles.kvGrid}>
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Citizen selected category</p>
+                        <p className={styles.kvValue}>
+                          {complaint.user_category || "Not provided"}
+                        </p>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Final operational category</p>
+                        <p className={styles.kvValue}>
+                          {complaint.final_category || "Not set"}
+                        </p>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Category source</p>
+                        <p className={styles.kvValue}>
+                          {complaint.category_source || "Not set"}
+                        </p>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>AI fusion category</p>
+                        <p className={styles.kvValue}>
+                          {ai?.fusion_label || "Pending"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {citizenAiConflict ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.kvLabel}>Citizen and AI mismatch</p>
+                        <p className={styles.kvValue}>
+                          The citizen-selected category and AI fusion category do not match.
+                          Manual authority confirmation is recommended before relying on AI.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
+
+                <article className={styles.panel}>
                   <h2 className={styles.panelTitle}>Evidence and images</h2>
 
                   <div className={styles.panelBody}>
@@ -405,12 +511,32 @@ export default async function AuthorityComplaintDetailPage({
                       </div>
                     </div>
 
+                    <div className={styles.kvGrid}>
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>AI reliability status</p>
+                        <p className={styles.kvValue}>
+                          <span className={reliabilityClass(reliabilityStatus)}>
+                            {reliabilityLabel(reliabilityStatus)}
+                          </span>
+                        </p>
+                      </div>
+
+                      <div className={manualReviewRequired ? styles.warningBox : styles.infoBox}>
+                        <p className={styles.kvLabel}>Manual review</p>
+                        <p className={styles.kvValue}>
+                          {manualReviewRequired
+                            ? "Required before trusting this AI result for action."
+                            : "No extra manual-review warning from the backend."}
+                        </p>
+                      </div>
+                    </div>
+
                     <div className={ai?.conflict_flag ? styles.warningBox : styles.infoBox}>
                       <p className={styles.kvLabel}>Consistency check</p>
                       <p className={styles.kvValue}>
                         {ai?.conflict_flag
                           ? "Text and image signals conflict"
-                          : "No major conflict detected"}
+                          : "No major text-image conflict detected"}
                       </p>
                     </div>
 
@@ -419,6 +545,21 @@ export default async function AuthorityComplaintDetailPage({
                       <p className={styles.kvValue}>
                         {ai?.summary || "No AI summary available yet."}
                       </p>
+                    </div>
+
+                    <div className={styles.infoBox}>
+                      <p className={styles.kvLabel}>Quality flags</p>
+                      {qualityFlags.length > 0 ? (
+                        <div className={styles.outputList}>
+                          {qualityFlags.map((flag) => (
+                            <div key={flag} className={styles.outputItem}>
+                              {prettifyFlag(flag)}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className={styles.kvValue}>No quality flags recorded.</p>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -479,6 +620,7 @@ export default async function AuthorityComplaintDetailPage({
                   currentStatus={complaint.status}
                   currentResolutionNote={complaint.resolution_note}
                   resolvedAt={complaint.resolved_at}
+                  currentFinalCategory={complaint.final_category}
                 />
               </aside>
             </div>
