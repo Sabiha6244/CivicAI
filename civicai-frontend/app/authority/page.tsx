@@ -56,6 +56,17 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function parseNumber(value?: string | null) {
+  if (!value) return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function nicePercent(value?: number | null) {
+  if (value == null) return "Pending";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
 function statusClass(status: string) {
   switch (status) {
     case "submitted":
@@ -144,22 +155,60 @@ function countMapToSortedList(
     }));
 }
 
+function average(values: number[]) {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildComplaintsHref({
+  status,
+  review,
+  area,
+  category,
+}: {
+  status?: string;
+  review?: string;
+  area?: string;
+  category?: string;
+}) {
+  const search = new URLSearchParams();
+  if (status) search.set("status", status);
+  if (review) search.set("review", review);
+  if (area) search.set("area", area);
+  if (category) search.set("category", category);
+
+  const qs = search.toString();
+  return qs ? `/authority/complaints?${qs}` : "/authority/complaints";
+}
+
 function MetricCard({
   label,
   value,
   text,
+  href,
 }: {
   label: string;
   value: string | number;
   text: string;
+  href?: string;
 }) {
-  return (
+  const content = (
     <div className={styles.statMiniCard}>
       <p className={styles.statMiniLabel}>{label}</p>
       <h3 className={styles.statMiniValue}>{value}</h3>
       <p className={styles.statMiniText}>{text}</p>
     </div>
   );
+
+  if (href) {
+    return (
+      <Link href={href} className={styles.metricCardLink}>
+        {content}
+      </Link>
+    );
+  }
+
+  return content;
 }
 
 function BarChart({
@@ -295,8 +344,8 @@ export default async function AuthorityPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() { },
-        remove() { },
+        set() {},
+        remove() {},
       },
     }
   );
@@ -396,10 +445,10 @@ export default async function AuthorityPage() {
   const totalComplaints = complaints.length;
   const submittedCount = complaints.filter((item) => item.status === "submitted").length;
   const processingCount = complaints.filter((item) => item.status === "processing").length;
-  const resolvedCount = complaints.filter(
-    (item) => item.status === "resolved" || item.status === "completed"
-  ).length;
+  const resolvedOnlyCount = complaints.filter((item) => item.status === "resolved").length;
+  const completedCount = complaints.filter((item) => item.status === "completed").length;
   const rejectedCount = complaints.filter((item) => item.status === "rejected").length;
+  const resolvedCount = resolvedOnlyCount + completedCount;
 
   const highPriorityCount = complaints.filter((item) => {
     const ai = inferenceByComplaint.get(item.id);
@@ -460,6 +509,40 @@ export default async function AuthorityPage() {
 
   const recentComplaints = complaints.slice(0, 6);
 
+  const aiRows = complaints
+    .map((complaint) => inferenceByComplaint.get(complaint.id))
+    .filter((item): item is InferenceRow => Boolean(item));
+
+  const adaptiveFusionCount = aiRows.filter((row) => {
+    const strategy = row.model_versions?.fusion_strategy || "";
+    const textWeight = parseNumber(row.model_versions?.text_weight);
+    const imageWeight = parseNumber(row.model_versions?.image_weight);
+    return strategy.includes("adaptive") || textWeight != null || imageWeight != null;
+  }).length;
+
+  const areaSignalCount = aiRows.filter((row) => {
+    const score = parseNumber(row.model_versions?.area_frequency_score);
+    return score != null && score > 0;
+  }).length;
+
+  const thresholdConflictCount = aiRows.filter((row) => {
+    const textThreshold = parseNumber(row.model_versions?.conflict_threshold_text);
+    const imageThreshold = parseNumber(row.model_versions?.conflict_threshold_image);
+    return textThreshold != null && imageThreshold != null;
+  }).length;
+
+  const avgFusionConfidence = average(
+    aiRows
+      .map((row) => row.fusion_confidence)
+      .filter((value): value is number => value != null)
+  );
+
+  const avgTextWeight = average(
+    aiRows
+      .map((row) => parseNumber(row.model_versions?.text_weight))
+      .filter((value): value is number => value != null)
+  );
+
   return (
     <main className={styles.page}>
       <div className={styles.wrapper}>
@@ -483,14 +566,10 @@ export default async function AuthorityPage() {
                 <Link href="/authority/complaints" className={styles.sidebarLink}>
                   Manage complaints
                 </Link>
-
                 <Link href="/authority/analytics" className={styles.sidebarLink}>
                   Open analytics
                 </Link>
-
-
               </nav>
-
             </div>
           </aside>
 
@@ -508,21 +587,85 @@ export default async function AuthorityPage() {
                   label="Total complaints"
                   value={totalComplaints}
                   text="Complaint records currently visible in the dashboard."
+                  href={buildComplaintsHref({})}
                 />
                 <MetricCard
                   label="Manual review"
                   value={manualReviewCount}
                   text="Cases flagged by the backend as requiring human review."
+                  href={buildComplaintsHref({ review: "manual_review" })}
                 />
                 <MetricCard
                   label="Conflict cases"
                   value={conflictCount}
                   text="Text-image disagreement or citizen-AI mismatch cases."
+                  href={buildComplaintsHref({ review: "conflict" })}
                 />
                 <MetricCard
                   label="High priority"
                   value={highPriorityCount}
                   text="Complaints marked high by the current AI priority logic."
+                  href={buildComplaintsHref({ review: "high_priority" })}
+                />
+              </div>
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Backend evidence overview</h2>
+                  <p className={styles.sectionText}>
+                    Publication-oriented monitoring of the new adaptive fusion and priority signals.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.summaryGrid}>
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Adaptive fusion used</p>
+                  <h3 className={styles.summaryValue}>{adaptiveFusionCount}</h3>
+                  <p className={styles.summaryText}>
+                    Complaints that already contain adaptive text-image weighting evidence.
+                  </p>
+                </div>
+
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Average fusion confidence</p>
+                  <h3 className={styles.summaryValue}>{nicePercent(avgFusionConfidence)}</h3>
+                  <p className={styles.summaryText}>
+                    Mean fused confidence across complaints with saved AI results.
+                  </p>
+                </div>
+
+                <div className={styles.summaryCard}>
+                  <p className={styles.summaryLabel}>Area repetition signal</p>
+                  <h3 className={styles.summaryValue}>{areaSignalCount}</h3>
+                  <p className={styles.summaryText}>
+                    Complaints where same-area repetition contributes to the priority logic.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.statStrip}>
+                <MetricCard
+                  label="Average text weight"
+                  value={nicePercent(avgTextWeight)}
+                  text="Average contribution of the text branch in adaptive fusion."
+                />
+                <MetricCard
+                  label="AI-scored complaints"
+                  value={aiRows.length}
+                  text="Complaints that already contain saved multimodal AI outputs."
+                />
+                <MetricCard
+                  label="Thresholded conflicts"
+                  value={thresholdConflictCount}
+                  text="Complaints with stored threshold-based conflict evidence."
+                />
+                <MetricCard
+                  label="Area signal cases"
+                  value={areaSignalCount}
+                  text="Complaints where area repetition contributes to priority."
                 />
               </div>
             </section>
@@ -540,12 +683,10 @@ export default async function AuthorityPage() {
                   <Link href="/authority/complaints" className={styles.primaryLink}>
                     Manage complaints
                   </Link>
-
                   <Link href="/authority/analytics" className={styles.secondaryLink}>
                     Open analytics
                   </Link>
                 </div>
-
               </div>
 
               <div className={styles.analyticsChartGrid}>
@@ -566,22 +707,26 @@ export default async function AuthorityPage() {
                 <MetricCard
                   label="Submitted"
                   value={submittedCount}
-                  text="Newly submitted complaints waiting in queue."
+                  text="New complaints waiting in queue."
+                  href={buildComplaintsHref({ status: "submitted" })}
                 />
                 <MetricCard
                   label="Processing"
                   value={processingCount}
                   text="Cases currently under authority handling."
+                  href={buildComplaintsHref({ status: "processing" })}
                 />
                 <MetricCard
                   label="Resolved"
-                  value={resolvedCount}
-                  text="Complaints completed or marked resolved."
+                  value={resolvedOnlyCount}
+                  text="Complaints marked resolved by authorities."
+                  href={buildComplaintsHref({ status: "resolved" })}
                 />
                 <MetricCard
                   label="Rejected"
                   value={rejectedCount}
-                  text="Complaints rejected after authority review."
+                  text="Complaints rejected after review."
+                  href={buildComplaintsHref({ status: "rejected" })}
                 />
               </div>
             </section>
@@ -605,13 +750,16 @@ export default async function AuthorityPage() {
                   items={manualReviewComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
+                    const fusionConfidence = ai?.fusion_confidence;
 
                     return {
                       id: complaint.id,
                       title: complaint.title || "Untitled complaint",
                       meta: `${getAreaName(complaint)} • ${formatDate(
                         complaint.created_at
-                      )} • ${reliabilityLabel(reliability)}`,
+                      )} • ${reliabilityLabel(reliability)} • Fusion ${nicePercent(
+                        fusionConfidence
+                      )}`,
                       badge: "Review",
                     };
                   })}
@@ -624,13 +772,15 @@ export default async function AuthorityPage() {
                   badgeClass={styles.priorityMedium}
                   items={conflictComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
+                    const textThreshold = parseNumber(ai?.model_versions?.conflict_threshold_text);
+                    const imageThreshold = parseNumber(ai?.model_versions?.conflict_threshold_image);
 
                     return {
                       id: complaint.id,
                       title: complaint.title || "Untitled complaint",
-                      meta: `${getAreaName(complaint)} • ${formatDate(
-                        complaint.created_at
-                      )} • AI: ${ai?.fusion_label || "Pending"}`,
+                      meta: `${getAreaName(complaint)} • AI: ${
+                        ai?.fusion_label || "Pending"
+                      } • T ${nicePercent(textThreshold)} • I ${nicePercent(imageThreshold)}`,
                       badge: "Conflict",
                     };
                   })}
@@ -651,7 +801,11 @@ export default async function AuthorityPage() {
                   ) : (
                     <div className={styles.dashboardInboxList}>
                       {topAreas.map((item) => (
-                        <div key={item.label} className={styles.dashboardInboxStaticItem}>
+                        <Link
+                          key={item.label}
+                          href={buildComplaintsHref({ area: item.label })}
+                          className={styles.dashboardInboxItem}
+                        >
                           <div className={styles.dashboardInboxItemTop}>
                             <h4 className={styles.dashboardInboxItemTitle}>{item.label}</h4>
                             <span className={styles.chip}>{item.count}</span>
@@ -659,7 +813,7 @@ export default async function AuthorityPage() {
                           <p className={styles.dashboardInboxItemMeta}>
                             {item.share.toFixed(1)}% of total complaints
                           </p>
-                        </div>
+                        </Link>
                       ))}
                     </div>
                   )}
@@ -678,12 +832,10 @@ export default async function AuthorityPage() {
                     <Link href="/authority/complaints" className={styles.primaryLink}>
                       Manage complaints
                     </Link>
-
                     <Link href="/authority/analytics" className={styles.secondaryLink}>
                       Open analytics
                     </Link>
                   </div>
-
                 </div>
               </div>
 
@@ -697,6 +849,10 @@ export default async function AuthorityPage() {
                     const reliability = ai?.model_versions?.reliability_status ?? null;
                     const citizenAiConflict =
                       ai?.model_versions?.citizen_ai_conflict === "true";
+
+                    const textWeight = parseNumber(ai?.model_versions?.text_weight);
+                    const imageWeight = parseNumber(ai?.model_versions?.image_weight);
+                    const areaSignal = parseNumber(ai?.model_versions?.area_frequency_score);
 
                     return (
                       <article key={complaint.id} className={styles.dashboardQueueRow}>
@@ -720,6 +876,12 @@ export default async function AuthorityPage() {
                           <p className={styles.dashboardQueueMeta}>
                             Reporter: {complaint.reporter_name || "Unknown"} • Area:{" "}
                             {getAreaName(complaint)} • Submitted: {formatDate(complaint.created_at)}
+                          </p>
+
+                          <p className={styles.dashboardQueueSubMeta}>
+                            Fusion {nicePercent(ai?.fusion_confidence)} • Text{" "}
+                            {nicePercent(textWeight)} • Image {nicePercent(imageWeight)} • Area signal{" "}
+                            {areaSignal != null ? areaSignal.toFixed(3) : "Pending"}
                           </p>
 
                           <div className={styles.chipRow}>

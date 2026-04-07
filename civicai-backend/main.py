@@ -27,7 +27,6 @@ BASE_DIR = Path(__file__).resolve().parent
 TEXT_MODEL_DIR = BASE_DIR / "models" / "text_model"
 YOLO_MODEL_PATH = BASE_DIR / "models" / "yolo" / "best.pt"
 TEXT_META_PATH = TEXT_MODEL_DIR / "meta.json"
-YOLO_DATA_PATH = BASE_DIR / "models" / "yolo" / "data.yaml"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -42,24 +41,34 @@ OTP_TTL_MINUTES = 10
 OTP_COOLDOWN_SECONDS = 60
 MAX_ATTEMPTS = 5
 
+# Neutral adaptive-fusion defaults.
+# These do not hard-code a preferred modality the way 0.6 / 0.4 did.
+FUSION_ALPHA_TEXT = 1.0
+FUSION_ALPHA_IMAGE = 1.0
+
+# Conservative disagreement thresholds.
+# Tune these later on a validation split for the paper.
+CONFLICT_TEXT_THRESHOLD = 0.55
+CONFLICT_IMAGE_THRESHOLD = 0.35
+
+# Priority-scoring defaults aligned with the methodology.
+RECENCY_BETA = 0.08
+AREA_FREQUENCY_WINDOW_DAYS = 30
+AREA_FREQUENCY_SATURATION_COUNT = 5
+
+# Reliability / review thresholds.
+LOW_TEXT_CONFIDENCE_THRESHOLD = 0.45
+LOW_IMAGE_CONFIDENCE_THRESHOLD = 0.30
+LOW_FUSION_CONFIDENCE_THRESHOLD = 0.45
+NEEDS_REVIEW_FUSION_THRESHOLD = 0.75
+
+EPSILON = 1e-8
+
 TEXT_TOKENIZER = None
 TEXT_MODEL = None
 TEXT_META: dict[str, Any] | None = None
 YOLO_MODEL = None
 YOLO_CLASS_NAMES: list[str] = []
-
-TEXT_TO_PRIORITY_WEIGHT = {
-    "Crime and Safety": 30,
-    "Electricity and Power Supply": 28,
-    "Streetlights": 25,
-    "Traffic and Road Safety": 24,
-    "Storm Water Drains": 22,
-    "Water Supply and Services": 20,
-    "Garbage and Unsanitary Practices": 18,
-    "Sewerage Systems": 18,
-    "Trees and Saplings": 14,
-    "Pollution": 16,
-}
 
 IMAGE_TO_CIVIC_LABEL = {
     "Damaged Road issues": "Mobility - Roads, Footpaths and Infrastructure",
@@ -88,9 +97,6 @@ CITIZEN_TO_INTERNAL_CATEGORY = {
     "Community Services": "Community Infrastructure and Services",
     "Other": "Other",
 }
-
-FUSION_TEXT_WEIGHT = 0.6
-FUSION_IMAGE_WEIGHT = 0.4
 
 CATEGORY_SEVERITY = {
     "Crime and Safety": 1.00,
@@ -195,6 +201,50 @@ def rest_patch(path: str, payload: Any, params: Optional[dict] = None):
         json=payload,
         timeout=30,
     )
+
+
+def normalize_text(text: str) -> str:
+    return " ".join((text or "").strip().split())
+
+
+def safe_float(value: Any, digits: int = 6) -> float:
+    return round(float(value), digits)
+
+
+def format_metric(value: Any, digits: int = 4) -> str:
+    return f"{float(value):.{digits}f}"
+
+
+def build_in_filter(values: list[str]) -> str:
+    clean_values = [str(v).strip() for v in values if str(v).strip()]
+    if not clean_values:
+        return "in.()"
+    return f"in.({','.join(clean_values)})"
+
+
+def get_primary_area_field_and_value(complaint: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    for field in ("city_area", "upazila", "district", "address_label"):
+        raw = complaint.get(field)
+        value = normalize_text(raw or "")
+        if value:
+            return field, value
+    return None, None
+
+
+def serialize_model_versions(data: Dict[str, Any]) -> Dict[str, str]:
+    serialized: Dict[str, str] = {}
+    for key, value in data.items():
+        if value is None:
+            serialized[key] = ""
+        elif isinstance(value, bool):
+            serialized[key] = str(value).lower()
+        elif isinstance(value, float):
+            serialized[key] = format_metric(value, digits=6)
+        elif isinstance(value, (dict, list)):
+            serialized[key] = json.dumps(value, ensure_ascii=False)
+        else:
+            serialized[key] = str(value)
+    return serialized
 
 
 # ---------- email ----------
@@ -311,7 +361,12 @@ def sb_upsert_profile_verified(user_id: str):
 def get_complaint_row(complaint_id: str) -> Dict[str, Any]:
     params = {
         "id": f"eq.{complaint_id}",
-        "select": "id,title,description,status,created_at,user_category,final_category,category_source",
+        "select": (
+            "id,title,description,status,created_at,"
+            "user_category,final_category,category_source,"
+            "division,district,upazila,city_area,address_label,"
+            "lat,lng,location_details"
+        ),
         "limit": "1",
     }
     r = rest_get("complaints", params=params)
@@ -363,6 +418,7 @@ def get_existing_inference_result(complaint_id: str) -> Optional[Dict[str, Any]]
     rows = r.json()
     return rows[0] if rows else None
 
+
 def get_text_label_order(meta: dict[str, Any]) -> list[str]:
     id2label = meta.get("id2label", {})
     if not id2label:
@@ -375,15 +431,21 @@ def get_text_label_order(meta: dict[str, Any]) -> list[str]:
     return ordered
 
 
-def normalize_score_dict(score_dict: dict[str, float], label_order: list[str]) -> dict[str, float]:
+def normalize_score_dict(
+    score_dict: dict[str, float],
+    label_order: list[str],
+    fallback_uniform: bool = True,
+) -> dict[str, float]:
     clean_scores = {label: max(0.0, float(score_dict.get(label, 0.0))) for label in label_order}
     total = sum(clean_scores.values())
 
     if total <= 0:
         if not label_order:
             return {}
-        uniform = 1.0 / len(label_order)
-        return {label: uniform for label in label_order}
+        if fallback_uniform:
+            uniform = 1.0 / len(label_order)
+            return {label: uniform for label in label_order}
+        return {label: 0.0 for label in label_order}
 
     return {label: value / total for label, value in clean_scores.items()}
 
@@ -398,14 +460,107 @@ def recency_score(created_at_value: Optional[str]) -> float:
     except Exception:
         return 0.5
 
-    beta = 0.08
-    return float(np.exp(-beta * days_old))
+    return safe_float(np.exp(-RECENCY_BETA * days_old), digits=6)
 
 
-def area_frequency_score() -> float:
-    # Placeholder for now. This keeps the formula structure from the paper,
-    # and can later be replaced with real area/category repetition logic.
-    return 0.0
+def fetch_inference_label_map(complaint_ids: list[str]) -> dict[str, Optional[str]]:
+    if not complaint_ids:
+        return {}
+
+    params = {
+        "complaint_id": build_in_filter(complaint_ids),
+        "select": "complaint_id,fusion_label",
+    }
+    r = rest_get("inference_results", params=params)
+    if r.status_code != 200:
+        return {}
+
+    rows = r.json()
+    return {str(row.get("complaint_id")): row.get("fusion_label") for row in rows}
+
+
+def infer_existing_category(
+    complaint_row: Dict[str, Any],
+    inference_label_map: dict[str, Optional[str]],
+) -> Optional[str]:
+    final_category = complaint_row.get("final_category")
+    if final_category:
+        return normalize_text(final_category)
+
+    user_category = complaint_row.get("user_category")
+    mapped_user_category = map_citizen_category_to_internal(user_category)
+    if mapped_user_category:
+        return normalize_text(mapped_user_category)
+
+    complaint_id = str(complaint_row.get("id") or "")
+    inferred = inference_label_map.get(complaint_id)
+    if inferred:
+        return normalize_text(inferred)
+
+    return None
+
+
+def area_frequency_score(
+    complaint: Dict[str, Any],
+    target_category: Optional[str],
+) -> Dict[str, Any]:
+    area_field, area_value = get_primary_area_field_and_value(complaint)
+    if not area_field or not area_value or not target_category:
+        return {
+            "score": 0.0,
+            "matching_count": 0,
+            "repeat_count": 0,
+            "window_days": AREA_FREQUENCY_WINDOW_DAYS,
+            "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
+            "area_field": area_field,
+            "area_value": area_value,
+        }
+
+    cutoff = iso(utc_now() - timedelta(days=AREA_FREQUENCY_WINDOW_DAYS))
+    params = {
+        "select": "id,user_category,final_category,created_at",
+        area_field: f"eq.{area_value}",
+        "created_at": f"gte.{cutoff}",
+        "order": "created_at.desc",
+        "limit": "250",
+    }
+    r = rest_get("complaints", params=params)
+    if r.status_code != 200:
+        return {
+            "score": 0.0,
+            "matching_count": 0,
+            "repeat_count": 0,
+            "window_days": AREA_FREQUENCY_WINDOW_DAYS,
+            "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
+            "area_field": area_field,
+            "area_value": area_value,
+        }
+
+    rows = r.json() or []
+    related_ids = [str(row.get("id")) for row in rows if row.get("id")]
+    inference_label_map = fetch_inference_label_map(related_ids)
+
+    matching_count = 0
+    for row in rows:
+        existing_category = infer_existing_category(row, inference_label_map)
+        if existing_category == target_category:
+            matching_count += 1
+
+    current_id = str(complaint.get("id") or "")
+    current_present = any(str(row.get("id") or "") == current_id for row in rows)
+    repeat_count = max(0, matching_count - (1 if current_present else 0))
+    score = min(1.0, repeat_count / AREA_FREQUENCY_SATURATION_COUNT)
+
+    return {
+        "score": safe_float(score),
+        "matching_count": int(matching_count),
+        "repeat_count": int(repeat_count),
+        "window_days": AREA_FREQUENCY_WINDOW_DAYS,
+        "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
+        "area_field": area_field,
+        "area_value": area_value,
+    }
+
 
 def looks_like_low_quality_text(text: str) -> bool:
     clean = normalize_text(text)
@@ -451,15 +606,25 @@ def build_quality_flags(
         flags.append("low_quality_text")
 
     text_conf = float(text_result.get("confidence") or 0.0)
-    if text_conf < 0.45:
+    if text_conf < LOW_TEXT_CONFIDENCE_THRESHOLD:
         flags.append("low_text_confidence")
 
-    image_labels = image_result.get("labels") or []
-    if not image_labels:
+    raw_image_labels = image_result.get("labels") or []
+    if not raw_image_labels:
         flags.append("no_image_detection")
 
+    if raw_image_labels and not image_result.get("has_mapped_signal"):
+        flags.append("no_mapped_image_signal")
+
+    image_branch_conf = float(image_result.get("branch_confidence") or 0.0)
+    if image_result.get("has_mapped_signal") and image_branch_conf < LOW_IMAGE_CONFIDENCE_THRESHOLD:
+        flags.append("low_image_confidence")
+
+    if not image_result.get("has_mapped_signal"):
+        flags.append("text_only_fallback")
+
     fusion_conf = float(fusion_result.get("fusion_confidence") or 0.0)
-    if fusion_conf < 0.45:
+    if fusion_conf < LOW_FUSION_CONFIDENCE_THRESHOLD:
         flags.append("low_fusion_confidence")
 
     if fusion_result.get("conflict_flag"):
@@ -489,15 +654,19 @@ def assess_ai_reliability(
     )
 
     fusion_conf = float(fusion_result.get("fusion_confidence") or 0.0)
-    has_image_signal = bool(image_result.get("labels"))
+    has_image_signal = bool(image_result.get("has_mapped_signal"))
+    text_conf = float(text_result.get("confidence") or 0.0)
+    image_conf = float(image_result.get("branch_confidence") or 0.0)
 
     if "low_quality_text" in quality_flags and not has_image_signal:
         reliability_status = "insufficient_evidence"
     elif fusion_result.get("conflict_flag") or citizen_ai_conflict:
         reliability_status = "conflict_detected"
-    elif fusion_conf < 0.45:
+    elif fusion_conf < LOW_FUSION_CONFIDENCE_THRESHOLD:
         reliability_status = "low_confidence"
-    elif fusion_conf < 0.75 or "low_text_confidence" in quality_flags:
+    elif text_conf < LOW_TEXT_CONFIDENCE_THRESHOLD and (not has_image_signal or image_conf < LOW_IMAGE_CONFIDENCE_THRESHOLD):
+        reliability_status = "low_confidence"
+    elif fusion_conf < NEEDS_REVIEW_FUSION_THRESHOLD or "low_text_confidence" in quality_flags or "low_image_confidence" in quality_flags:
         reliability_status = "needs_review"
     else:
         reliability_status = "reliable"
@@ -514,6 +683,7 @@ def assess_ai_reliability(
         "manual_review_required": manual_review_required,
         "quality_flags": quality_flags,
     }
+
 
 def map_citizen_category_to_internal(user_category: Optional[str]) -> Optional[str]:
     if not user_category:
@@ -639,10 +809,6 @@ def load_yolo_assets():
     return YOLO_MODEL, YOLO_CLASS_NAMES
 
 
-def normalize_text(text: str) -> str:
-    return " ".join((text or "").strip().split())
-
-
 def run_text_inference(title: str, description: str) -> Dict[str, Any]:
     tokenizer, model, meta = load_text_assets()
 
@@ -670,8 +836,8 @@ def run_text_inference(title: str, description: str) -> Dict[str, Any]:
         encoded = {k: v.to(device) for k, v in encoded.items()}
 
         with torch.no_grad():
-          outputs = model(**encoded)
-          probs = torch.softmax(outputs.logits, dim=1)[0].detach().cpu().numpy()
+            outputs = model(**encoded)
+            probs = torch.softmax(outputs.logits, dim=1)[0].detach().cpu().numpy()
 
         distribution = {
             label_order[idx]: float(probs[idx])
@@ -683,26 +849,33 @@ def run_text_inference(title: str, description: str) -> Dict[str, Any]:
 
         return {
             "label": best_label,
-            "confidence": best_confidence,
+            "confidence": safe_float(best_confidence),
             "distribution": distribution,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Text inference failed: {str(e)}")
 
+
 def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
     _, _, meta = load_text_assets()
     label_order = get_text_label_order(meta)
 
+    empty_distribution = normalize_score_dict({}, label_order, fallback_uniform=False)
+    empty_result = {
+        "labels": [],
+        "confidences": [],
+        "boxes": [],
+        "detected_image_bytes": None,
+        "top_civic_label": None,
+        "top_civic_probability": 0.0,
+        "branch_confidence": 0.0,
+        "mapped_evidence_total": 0.0,
+        "has_mapped_signal": False,
+        "distribution": empty_distribution,
+    }
+
     if not public_url:
-        empty_distribution = {label: 0.0 for label in label_order}
-        return {
-            "labels": [],
-            "confidences": [],
-            "boxes": [],
-            "detected_image_bytes": None,
-            "top_civic_label": None,
-            "distribution": normalize_score_dict(empty_distribution, label_order),
-        }
+        return empty_result
 
     model, _ = load_yolo_assets()
 
@@ -715,15 +888,7 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
 
         results = model.predict(source=image_np, verbose=False)
         if not results:
-            empty_distribution = {label: 0.0 for label in label_order}
-            return {
-                "labels": [],
-                "confidences": [],
-                "boxes": [],
-                "detected_image_bytes": None,
-                "top_civic_label": None,
-                "distribution": normalize_score_dict(empty_distribution, label_order),
-            }
+            return empty_result
 
         result = results[0]
         labels: list[str] = []
@@ -731,6 +896,7 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
         boxes: list[list[float]] = []
 
         civic_scores = {label: 0.0 for label in label_order}
+        mapped_detection_confidences: list[float] = []
 
         if result.boxes is not None and len(result.boxes) > 0:
             for box in result.boxes:
@@ -746,6 +912,7 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
                 mapped_label = IMAGE_TO_CIVIC_LABEL.get(raw_label)
                 if mapped_label:
                     civic_scores[mapped_label] = civic_scores.get(mapped_label, 0.0) + conf
+                    mapped_detection_confidences.append(conf)
 
             plotted = result.plot()
             plotted_rgb = plotted[:, :, ::-1]
@@ -754,27 +921,27 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
             annotated_image.save(buffer, format="JPEG", quality=92)
             detected_bytes = buffer.getvalue()
 
-            distribution = normalize_score_dict(civic_scores, label_order)
-            top_civic_label = max(distribution, key=distribution.get) if distribution else None
+            distribution = normalize_score_dict(civic_scores, label_order, fallback_uniform=False)
+            has_mapped_signal = any(value > 0.0 for value in civic_scores.values())
+            top_civic_label = max(distribution, key=distribution.get) if has_mapped_signal else None
+            top_civic_probability = float(distribution.get(top_civic_label, 0.0)) if top_civic_label else 0.0
+            branch_confidence = max(mapped_detection_confidences, default=0.0)
+            mapped_evidence_total = sum(mapped_detection_confidences)
 
             return {
                 "labels": labels,
-                "confidences": confidences,
+                "confidences": [safe_float(v) for v in confidences],
                 "boxes": boxes,
                 "detected_image_bytes": detected_bytes,
                 "top_civic_label": top_civic_label,
+                "top_civic_probability": safe_float(top_civic_probability),
+                "branch_confidence": safe_float(branch_confidence),
+                "mapped_evidence_total": safe_float(mapped_evidence_total),
+                "has_mapped_signal": has_mapped_signal,
                 "distribution": distribution,
             }
 
-        empty_distribution = normalize_score_dict(civic_scores, label_order)
-        return {
-            "labels": [],
-            "confidences": [],
-            "boxes": [],
-            "detected_image_bytes": None,
-            "top_civic_label": None,
-            "distribution": empty_distribution,
-        }
+        return empty_result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image inference failed: {str(e)}")
 
@@ -790,45 +957,80 @@ def fuse_results(text_result: Dict[str, Any], image_result: Dict[str, Any]) -> D
             "fusion_confidence": 0.0,
             "conflict_flag": False,
             "distribution": {},
-            "weights": {
-                "text": FUSION_TEXT_WEIGHT,
-                "image": FUSION_IMAGE_WEIGHT,
+            "weights": {"text": 1.0, "image": 0.0},
+            "branch_confidences": {"text": 0.0, "image": 0.0},
+            "conflict_thresholds": {
+                "text": CONFLICT_TEXT_THRESHOLD,
+                "image": CONFLICT_IMAGE_THRESHOLD,
             },
         }
+
+    text_available = bool(text_dist)
+    image_available = bool(image_result.get("has_mapped_signal"))
+    text_conf = float(text_result.get("confidence") or 0.0)
+    image_conf = float(image_result.get("branch_confidence") or 0.0)
+
+    if text_available and not image_available:
+        text_weight = 1.0
+        image_weight = 0.0
+    elif image_available and not text_available:
+        text_weight = 0.0
+        image_weight = 1.0
+    else:
+        text_reliability = FUSION_ALPHA_TEXT * text_conf
+        image_reliability = FUSION_ALPHA_IMAGE * image_conf
+        denom = text_reliability + image_reliability
+        if denom <= EPSILON:
+            text_weight = 0.5
+            image_weight = 0.5
+        else:
+            text_weight = text_reliability / denom
+            image_weight = image_reliability / denom
 
     fused_distribution: dict[str, float] = {}
     for label in label_order:
         t_score = float(text_dist.get(label, 0.0))
         i_score = float(image_dist.get(label, 0.0))
-        fused_distribution[label] = (
-            FUSION_TEXT_WEIGHT * t_score + FUSION_IMAGE_WEIGHT * i_score
-        )
+        fused_distribution[label] = (text_weight * t_score) + (image_weight * i_score)
 
-    fused_distribution = normalize_score_dict(fused_distribution, label_order)
+    fused_distribution = normalize_score_dict(fused_distribution, label_order, fallback_uniform=True)
     fusion_label = max(fused_distribution, key=fused_distribution.get)
     fusion_confidence = float(fused_distribution[fusion_label])
 
     text_label = text_result.get("label")
     image_label = image_result.get("top_civic_label")
-    image_has_signal = bool(image_result.get("labels"))
 
     conflict_flag = bool(
-        image_has_signal
+        image_available
         and text_label
         and image_label
         and text_label != image_label
+        and text_conf >= CONFLICT_TEXT_THRESHOLD
+        and image_conf >= CONFLICT_IMAGE_THRESHOLD
     )
 
     return {
         "fusion_label": fusion_label,
-        "fusion_confidence": fusion_confidence,
+        "fusion_confidence": safe_float(fusion_confidence),
         "conflict_flag": conflict_flag,
         "distribution": fused_distribution,
         "weights": {
-            "text": FUSION_TEXT_WEIGHT,
-            "image": FUSION_IMAGE_WEIGHT,
+            "text": safe_float(text_weight),
+            "image": safe_float(image_weight),
         },
+        "branch_confidences": {
+            "text": safe_float(text_conf),
+            "image": safe_float(image_conf),
+        },
+        "conflict_thresholds": {
+            "text": CONFLICT_TEXT_THRESHOLD,
+            "image": CONFLICT_IMAGE_THRESHOLD,
+        },
+        "used_text_only": bool(text_available and not image_available),
+        "used_image_only": bool(image_available and not text_available),
     }
+
+
 def simple_summary(title: str, description: str, fusion_label: str, image_labels: list[str]) -> str:
     clean_title = normalize_text(title or "")
     clean_desc = normalize_text(description or "")
@@ -862,23 +1064,23 @@ def simple_summary(title: str, description: str, fusion_label: str, image_labels
 
 
 def calculate_priority(
+    complaint: Dict[str, Any],
     fusion_label: Optional[str],
     fusion_conf: Optional[float],
     conflict_flag: bool,
-    image_labels: list[str],
-    created_at: Optional[str] = None,
 ):
     severity_component = float(CATEGORY_SEVERITY.get(fusion_label or "Uncategorized", 0.2))
+    area_info = area_frequency_score(complaint=complaint, target_category=fusion_label)
+    frequency_component = float(area_info.get("score") or 0.0)
+    recency_component = recency_score(complaint.get("created_at"))
     confidence_component = float(fusion_conf or 0.0)
-    frequency_component = area_frequency_score()
-    recency_component = recency_score(created_at)
     conflict_component = 1.0 if conflict_flag else 0.0
 
     priority_norm = (
         0.35 * severity_component
-        + 0.25 * confidence_component
+        + 0.20 * confidence_component
         + 0.20 * frequency_component
-        + 0.10 * recency_component
+        + 0.15 * recency_component
         - 0.10 * conflict_component
     )
 
@@ -900,7 +1102,8 @@ def calculate_priority(
         "conflict_penalty": round(conflict_component, 4),
     }
 
-    return priority_score, priority, components
+    return priority_score, priority, components, area_info
+
 
 # ---------- models ----------
 class SendOtpReq(BaseModel):
@@ -1039,12 +1242,11 @@ def run_ai_for_complaint(complaint_id: str):
         image_labels=image_result.get("labels") or [],
     )
 
-    priority_score, priority, priority_components = calculate_priority(
+    priority_score, priority, priority_components, area_info = calculate_priority(
+        complaint=complaint,
         fusion_label=fusion_result["fusion_label"],
         fusion_conf=fusion_result.get("fusion_confidence"),
         conflict_flag=fusion_result["conflict_flag"],
-        image_labels=image_result.get("labels") or [],
-        created_at=complaint.get("created_at"),
     )
 
     detected_image_path = None
@@ -1072,6 +1274,36 @@ def run_ai_for_complaint(complaint_id: str):
         citizen_ai_conflict=citizen_ai_conflict,
     )
 
+    model_versions_payload = serialize_model_versions({
+        "text_model": "roberta-base-local-finetuned",
+        "image_model": "yolo-best-pt-local",
+        "fusion_strategy": "adaptive-reliability-late-fusion-v3",
+        "priority_strategy": "severity-confidence-frequency-recency-conflict-v3",
+        "reliability_status": reliability["reliability_status"],
+        "manual_review_required": reliability["manual_review_required"],
+        "quality_flags": ", ".join(reliability["quality_flags"]) if reliability["quality_flags"] else "none",
+        "citizen_ai_conflict": citizen_ai_conflict,
+        "text_branch_confidence": text_result.get("confidence") or 0.0,
+        "image_branch_confidence": image_result.get("branch_confidence") or 0.0,
+        "image_top_civic_probability": image_result.get("top_civic_probability") or 0.0,
+        "image_mapped_evidence_total": image_result.get("mapped_evidence_total") or 0.0,
+        "text_weight": fusion_result.get("weights", {}).get("text", 1.0),
+        "image_weight": fusion_result.get("weights", {}).get("image", 0.0),
+        "used_text_only": fusion_result.get("used_text_only", False),
+        "used_image_only": fusion_result.get("used_image_only", False),
+        "conflict_threshold_text": CONFLICT_TEXT_THRESHOLD,
+        "conflict_threshold_image": CONFLICT_IMAGE_THRESHOLD,
+        "area_frequency_score": area_info.get("score", 0.0),
+        "area_frequency_repeat_count": area_info.get("repeat_count", 0),
+        "area_frequency_matching_count": area_info.get("matching_count", 0),
+        "area_frequency_window_days": area_info.get("window_days", AREA_FREQUENCY_WINDOW_DAYS),
+        "area_frequency_area_field": area_info.get("area_field") or "",
+        "area_frequency_area_value": area_info.get("area_value") or "",
+        "severity_score": priority_components.get("severity", 0.0),
+        "recency_score": priority_components.get("recency", 0.0),
+        "priority_components": priority_components,
+    })
+
     save_payload = {
         "text_label": text_result.get("label"),
         "text_confidence": text_result.get("confidence"),
@@ -1087,16 +1319,7 @@ def run_ai_for_complaint(complaint_id: str):
         "detected_image_url": detected_image_url,
         "detected_image_path": detected_image_path,
         "updated_at": iso(utc_now()),
-        "model_versions": {
-            "text_model": "roberta-base-local-finetuned",
-            "image_model": "yolo-best-pt-local",
-            "fusion_strategy": "weighted-late-fusion-v2",
-            "priority_strategy": "hybrid-priority-v2",
-            "reliability_status": reliability["reliability_status"],
-            "manual_review_required": str(reliability["manual_review_required"]).lower(),
-            "quality_flags": ", ".join(reliability["quality_flags"]) if reliability["quality_flags"] else "none",
-            "citizen_ai_conflict": str(citizen_ai_conflict).lower(),
-        },
+        "model_versions": model_versions_payload,
     }
 
     upsert_inference_result(complaint_id, save_payload)
@@ -1118,6 +1341,11 @@ def run_ai_for_complaint(complaint_id: str):
             "labels": image_result.get("labels"),
             "confidences": image_result.get("confidences"),
             "boxes": image_result.get("boxes"),
+            "top_civic_label": image_result.get("top_civic_label"),
+            "top_civic_probability": image_result.get("top_civic_probability"),
+            "branch_confidence": image_result.get("branch_confidence"),
+            "mapped_evidence_total": image_result.get("mapped_evidence_total"),
+            "has_mapped_signal": image_result.get("has_mapped_signal"),
             "detected_image_url": detected_image_url,
         },
         "fusion_result": fusion_result,
@@ -1125,6 +1353,7 @@ def run_ai_for_complaint(complaint_id: str):
         "priority": priority,
         "summary": summary,
         "priority_components": priority_components,
+        "area_frequency": area_info,
         "reliability_status": reliability["reliability_status"],
         "manual_review_required": reliability["manual_review_required"],
         "quality_flags": reliability["quality_flags"],
