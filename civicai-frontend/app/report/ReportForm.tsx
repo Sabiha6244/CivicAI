@@ -312,8 +312,7 @@ export default function ReportForm({ userId }: { userId: string }) {
       setLoading(false);
       setMsgType("error");
       setMsg(
-        `Unable to submit complaint: ${
-          complaintInsert.error?.message ?? "Complaint ID was not returned."
+        `Unable to submit complaint: ${complaintInsert.error?.message ?? "Complaint ID was not returned."
         }`
       );
       return;
@@ -360,16 +359,7 @@ export default function ReportForm({ userId }: { userId: string }) {
                 </Link>
               </nav>
 
-              <div className={styles.sidebarHelp}>
-                <p className={styles.sidebarHelpTitle}>Tips for better reports</p>
-                <ul className={styles.sidebarHelpList}>
-                  <li>Use a short and clear title</li>
-                  <li>Choose the closest matching category</li>
-                  <li>Mark the exact problem location</li>
-                  <li>Add landmarks in location details</li>
-                  <li>Upload a helpful image if available</li>
-                </ul>
-              </div>
+
             </div>
           </aside>
 
@@ -697,9 +687,8 @@ export default function ReportForm({ userId }: { userId: string }) {
 
               {msg && (
                 <div
-                  className={`${styles.alert} ${
-                    msgType === "error" ? styles.alertError : styles.alertInfo
-                  }`}
+                  className={`${styles.alert} ${msgType === "error" ? styles.alertError : styles.alertInfo
+                    }`}
                 >
                   {msg}
                 </div>
