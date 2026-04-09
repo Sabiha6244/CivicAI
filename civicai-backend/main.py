@@ -99,27 +99,62 @@ CITIZEN_TO_INTERNAL_CATEGORY = {
 }
 
 CATEGORY_SEVERITY = {
-    "Crime and Safety": 1.00,
-    "Electricity and Power Supply": 0.95,
-    "Streetlights": 0.85,
-    "Traffic and Road Safety": 0.85,
-    "Storm Water Drains": 0.80,
-    "Water Supply and Services": 0.78,
-    "Garbage and Unsanitary Practices": 0.72,
-    "Sewerage Systems": 0.72,
-    "Pollution": 0.70,
-    "Mobility - Roads, Footpaths and Infrastructure": 0.68,
-    "Mobility - Roads, Public transport": 0.62,
-    "Community Infrastructure and Services": 0.58,
-    "Public Toilets": 0.52,
-    "Trees and Saplings": 0.45,
-    "Parks & Recreation": 0.40,
-    "Lakes": 0.40,
-    "Animal Husbandry": 0.35,
-    "Certificates": 0.20,
-    "Other": 0.25,
-    "Uncategorized": 0.20,
+    "Crime and Safety": 0.183,
+    "Electricity and Power Supply": 0.163,
+    "Traffic and Road Safety": 0.153,
+    "Streetlights": 0.153,
+    "Mobility - Roads, Footpaths and Infrastructure": 0.153,
+    "Mobility - Roads, Public transport": 0.153,
+    "Water Supply and Services": 0.155,
+    "Sewerage Systems": 0.155,
+    "Storm Water Drains": 0.155,
+    "Garbage and Unsanitary Practices": 0.123,
+    "Pollution": 0.123,
+    "Public Toilets": 0.123,
+    "Community Infrastructure and Services": 0.093,
+    "Certificates": 0.093,
+    "Animal Husbandry": 0.093,
+    "Trees and Saplings": 0.088,
+    "Parks & Recreation": 0.088,
+    "Lakes": 0.088,
+    "Other": 0.042,
+    "Uncategorized": 0.042,
 }
+
+SEVERITY_SCALE_MIN = 0.20
+SEVERITY_SCALE_MAX = 1.00
+
+PRIORITY_WEIGHT_SEVERITY = 0.49
+PRIORITY_WEIGHT_FREQUENCY = 0.22
+PRIORITY_WEIGHT_RECENCY = 0.14
+PRIORITY_WEIGHT_CONFIDENCE = 0.09
+PRIORITY_WEIGHT_CONFLICT = 0.07
+
+
+def get_scaled_severity(label: Optional[str]) -> Dict[str, float]:
+    raw_value = float(
+        CATEGORY_SEVERITY.get(
+            label or "Uncategorized",
+            CATEGORY_SEVERITY["Uncategorized"],
+        )
+    )
+
+    all_values = list(CATEGORY_SEVERITY.values())
+    min_value = min(all_values)
+    max_value = max(all_values)
+
+    if max_value - min_value <= EPSILON:
+        scaled_value = raw_value
+    else:
+        normalized = (raw_value - min_value) / (max_value - min_value)
+        scaled_value = SEVERITY_SCALE_MIN + normalized * (
+            SEVERITY_SCALE_MAX - SEVERITY_SCALE_MIN
+        )
+
+    return {
+        "raw": safe_float(raw_value),
+        "scaled": safe_float(scaled_value),
+    }
 
 app = FastAPI()
 
@@ -1069,19 +1104,25 @@ def calculate_priority(
     fusion_conf: Optional[float],
     conflict_flag: bool,
 ):
-    severity_component = float(CATEGORY_SEVERITY.get(fusion_label or "Uncategorized", 0.2))
-    area_info = area_frequency_score(complaint=complaint, target_category=fusion_label)
+    severity_info = get_scaled_severity(fusion_label)
+    severity_component = float(severity_info["scaled"])
+    severity_raw = float(severity_info["raw"])
+
+    area_info = area_frequency_score(
+        complaint=complaint,
+        target_category=fusion_label,
+    )
     frequency_component = float(area_info.get("score") or 0.0)
     recency_component = recency_score(complaint.get("created_at"))
     confidence_component = float(fusion_conf or 0.0)
     conflict_component = 1.0 if conflict_flag else 0.0
 
     priority_norm = (
-        0.35 * severity_component
-        + 0.20 * confidence_component
-        + 0.20 * frequency_component
-        + 0.15 * recency_component
-        - 0.10 * conflict_component
+        PRIORITY_WEIGHT_SEVERITY * severity_component
+        + PRIORITY_WEIGHT_FREQUENCY * frequency_component
+        + PRIORITY_WEIGHT_RECENCY * recency_component
+        + PRIORITY_WEIGHT_CONFIDENCE * confidence_component
+        - PRIORITY_WEIGHT_CONFLICT * conflict_component
     )
 
     priority_norm = max(0.0, min(1.0, priority_norm))
@@ -1096,6 +1137,7 @@ def calculate_priority(
 
     components = {
         "severity": round(severity_component, 4),
+        "severity_raw": round(severity_raw, 4),
         "fusion_confidence": round(confidence_component, 4),
         "area_frequency": round(frequency_component, 4),
         "recency": round(recency_component, 4),
