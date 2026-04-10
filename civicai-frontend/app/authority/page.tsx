@@ -36,6 +36,8 @@ type InferenceRow = {
   conflict_flag: boolean | null;
   summary: string | null;
   model_versions: Record<string, string> | null;
+  image_labels?: string[] | null;
+  image_confidences?: number[] | null;
 };
 
 type RankedItem = {
@@ -62,9 +64,20 @@ function parseNumber(value?: string | null) {
   return Number.isFinite(num) ? num : null;
 }
 
+function parseBoolean(value?: string | null) {
+  if (!value) return false;
+  return value.toLowerCase() === "true";
+}
+
 function nicePercent(value?: number | null) {
-  if (value == null) return "Pending";
+  if (value == null) return "N/A";
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function niceLabel(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function statusClass(status: string) {
@@ -83,29 +96,12 @@ function statusClass(status: string) {
   }
 }
 
-function priorityClass(priority?: string | null) {
-  switch (priority) {
-    case "high":
-      return styles.priorityHigh;
-    case "medium":
-      return styles.priorityMedium;
-    case "low":
-      return styles.priorityLow;
-    default:
-      return styles.chip;
-  }
-}
-
 function reliabilityClass(value?: string | null) {
   switch (value) {
     case "reliable":
       return styles.priorityLow;
-    case "needs_review":
+    case "manual_review_needed":
       return styles.chipWarn;
-    case "low_confidence":
-      return styles.chipWarn;
-    case "conflict_detected":
-      return styles.priorityMedium;
     case "insufficient_evidence":
       return styles.priorityHigh;
     default:
@@ -117,16 +113,41 @@ function reliabilityLabel(value?: string | null) {
   switch (value) {
     case "reliable":
       return "Reliable";
-    case "needs_review":
-      return "Needs review";
-    case "low_confidence":
-      return "Low confidence";
-    case "conflict_detected":
-      return "Conflict";
+    case "manual_review_needed":
+      return "Manual review needed";
     case "insufficient_evidence":
       return "Insufficient evidence";
     default:
-      return "Pending";
+      return "Not available";
+  }
+}
+
+function confidenceLabel(value?: number | null) {
+  if (value == null) return "Not available";
+  if (value >= 0.85) return `High (${nicePercent(value)})`;
+  if (value >= 0.6) return `Moderate (${nicePercent(value)})`;
+  return `Low (${nicePercent(value)})`;
+}
+
+function ordinal(value?: number | null) {
+  if (value == null) return "N/A";
+  const v = Math.abs(value);
+  const mod10 = v % 10;
+  const mod100 = v % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${value}st`;
+  if (mod10 === 2 && mod100 !== 12) return `${value}nd`;
+  if (mod10 === 3 && mod100 !== 13) return `${value}rd`;
+  return `${value}th`;
+}
+
+function friendlyEscalation(value?: string | null) {
+  switch (value) {
+    case "escalate_now":
+      return "Needs escalation now";
+    case "within_threshold":
+      return "Within response window";
+    default:
+      return "Not available";
   }
 }
 
@@ -134,10 +155,16 @@ function getAreaName(complaint: ComplaintRow) {
   return complaint.city_area || complaint.upazila || complaint.district || "Unknown";
 }
 
-function niceLabel(value: string) {
-  return value
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
+function shortenText(text?: string | null, max = 120) {
+  if (!text) return "";
+  const clean = text.trim().replace(/\s+/g, " ");
+  if (clean.length <= max) return clean;
+
+  const sliced = clean.slice(0, max);
+  const lastSpace = sliced.lastIndexOf(" ");
+  const shortened = lastSpace > 0 ? sliced.slice(0, lastSpace) : sliced;
+
+  return `${shortened}...`;
 }
 
 function countMapToSortedList(
@@ -153,11 +180,6 @@ function countMapToSortedList(
       count,
       share: total > 0 ? (count / total) * 100 : 0,
     }));
-}
-
-function average(values: number[]) {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function buildComplaintsHref({
@@ -427,7 +449,9 @@ export default async function AuthorityPage() {
         priority_score,
         conflict_flag,
         summary,
-        model_versions
+        model_versions,
+        image_labels,
+        image_confidences
       `)
       .in("complaint_id", complaintIds);
 
@@ -450,14 +474,14 @@ export default async function AuthorityPage() {
   const rejectedCount = complaints.filter((item) => item.status === "rejected").length;
   const resolvedCount = resolvedOnlyCount + completedCount;
 
-  const highPriorityCount = complaints.filter((item) => {
-    const ai = inferenceByComplaint.get(item.id);
-    return ai?.priority === "high";
-  }).length;
-
   const manualReviewCount = complaints.filter((item) => {
     const ai = inferenceByComplaint.get(item.id);
     return ai?.model_versions?.manual_review_required === "true";
+  }).length;
+
+  const reliableCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    return ai?.model_versions?.reliability_status === "reliable";
   }).length;
 
   const conflictCount = complaints.filter((item) => {
@@ -466,14 +490,19 @@ export default async function AuthorityPage() {
     return !!ai?.conflict_flag || citizenAiConflict;
   }).length;
 
+  const priorityComputedCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    return ai?.model_versions?.priority_status === "computed";
+  }).length;
+
   const categoryCounts = new Map<string, number>();
   const areaCounts = new Map<string, number>();
 
   for (const complaint of complaints) {
     const category =
       complaint.final_category ||
-      complaint.user_category ||
       inferenceByComplaint.get(complaint.id)?.fusion_label ||
+      complaint.user_category ||
       "Uncategorized";
 
     categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
@@ -499,49 +528,25 @@ export default async function AuthorityPage() {
     })
     .slice(0, 3);
 
-  const conflictComplaints = complaints
-    .filter((complaint) => {
+  const queueComplaints = complaints
+    .map((complaint) => {
       const ai = inferenceByComplaint.get(complaint.id);
-      const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
-      return !!ai?.conflict_flag || citizenAiConflict;
+      const rank = parseNumber(ai?.model_versions?.priority_rank);
+      const escalation =
+        ai?.model_versions?.escalation_status || ai?.model_versions?.escalation || null;
+
+      return {
+        complaint,
+        ai,
+        rank,
+        escalation,
+      };
     })
+    .filter((item) => item.rank != null)
+    .sort((a, b) => (a.rank! - b.rank!))
     .slice(0, 3);
 
   const recentComplaints = complaints.slice(0, 6);
-
-  const aiRows = complaints
-    .map((complaint) => inferenceByComplaint.get(complaint.id))
-    .filter((item): item is InferenceRow => Boolean(item));
-
-  const adaptiveFusionCount = aiRows.filter((row) => {
-    const strategy = row.model_versions?.fusion_strategy || "";
-    const textWeight = parseNumber(row.model_versions?.text_weight);
-    const imageWeight = parseNumber(row.model_versions?.image_weight);
-    return strategy.includes("adaptive") || textWeight != null || imageWeight != null;
-  }).length;
-
-  const areaSignalCount = aiRows.filter((row) => {
-    const score = parseNumber(row.model_versions?.area_frequency_score);
-    return score != null && score > 0;
-  }).length;
-
-  const thresholdConflictCount = aiRows.filter((row) => {
-    const textThreshold = parseNumber(row.model_versions?.conflict_threshold_text);
-    const imageThreshold = parseNumber(row.model_versions?.conflict_threshold_image);
-    return textThreshold != null && imageThreshold != null;
-  }).length;
-
-  const avgFusionConfidence = average(
-    aiRows
-      .map((row) => row.fusion_confidence)
-      .filter((value): value is number => value != null)
-  );
-
-  const avgTextWeight = average(
-    aiRows
-      .map((row) => parseNumber(row.model_versions?.text_weight))
-      .filter((value): value is number => value != null)
-  );
 
   return (
     <main className={styles.page}>
@@ -552,8 +557,8 @@ export default async function AuthorityPage() {
               <p className={styles.sidebarEyebrow}>Authority workspace</p>
               <h2 className={styles.sidebarTitle}>Dashboard</h2>
               <p className={styles.sidebarText}>
-                Review complaint submissions, inspect AI reliability, and focus on
-                cases that require manual authority attention.
+                Review complaint submissions, inspect AI suggestions, and focus on
+                the cases that need authority attention first.
               </p>
 
               <nav className={styles.sidebarNav}>
@@ -578,8 +583,8 @@ export default async function AuthorityPage() {
               <p className={styles.eyebrow}>Authority review workspace</p>
               <h1 className={styles.title}>Complaint operations dashboard</h1>
               <p className={styles.subtitle}>
-                A cleaner authority dashboard for day-to-day monitoring, urgent review,
-                and quick movement into analytics or complaint detail pages.
+                A cleaner dashboard for daily monitoring, manual review, and quick
+                movement into complaint detail pages.
               </p>
 
               <div className={styles.statStrip}>
@@ -590,82 +595,22 @@ export default async function AuthorityPage() {
                   href={buildComplaintsHref({})}
                 />
                 <MetricCard
+                  label="Submitted"
+                  value={submittedCount}
+                  text="New complaints waiting in the authority queue."
+                  href={buildComplaintsHref({ status: "submitted" })}
+                />
+                <MetricCard
+                  label="Reliable AI"
+                  value={reliableCount}
+                  text="Cases where AI can be used as a strong starting point."
+                  href={buildComplaintsHref({ review: "reliable" })}
+                />
+                <MetricCard
                   label="Manual review"
                   value={manualReviewCount}
-                  text="Cases flagged by the backend as requiring human review."
+                  text="Cases that should be checked carefully before action."
                   href={buildComplaintsHref({ review: "manual_review" })}
-                />
-                <MetricCard
-                  label="Conflict cases"
-                  value={conflictCount}
-                  text="Text-image disagreement or citizen-AI mismatch cases."
-                  href={buildComplaintsHref({ review: "conflict" })}
-                />
-                <MetricCard
-                  label="High priority"
-                  value={highPriorityCount}
-                  text="Complaints marked high by the current AI priority logic."
-                  href={buildComplaintsHref({ review: "high_priority" })}
-                />
-              </div>
-            </section>
-
-            <section className={styles.section}>
-              <div className={styles.sectionHeader}>
-                <div>
-                  <h2 className={styles.sectionTitle}>Backend evidence overview</h2>
-                  <p className={styles.sectionText}>
-                    Publication-oriented monitoring of the new adaptive fusion and priority signals.
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles.summaryGrid}>
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Adaptive fusion used</p>
-                  <h3 className={styles.summaryValue}>{adaptiveFusionCount}</h3>
-                  <p className={styles.summaryText}>
-                    Complaints that already contain adaptive text-image weighting evidence.
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Average fusion confidence</p>
-                  <h3 className={styles.summaryValue}>{nicePercent(avgFusionConfidence)}</h3>
-                  <p className={styles.summaryText}>
-                    Mean fused confidence across complaints with saved AI results.
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Area repetition signal</p>
-                  <h3 className={styles.summaryValue}>{areaSignalCount}</h3>
-                  <p className={styles.summaryText}>
-                    Complaints where same-area repetition contributes to the priority logic.
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles.statStrip}>
-                <MetricCard
-                  label="Average text weight"
-                  value={nicePercent(avgTextWeight)}
-                  text="Average contribution of the text branch in adaptive fusion."
-                />
-                <MetricCard
-                  label="AI-scored complaints"
-                  value={aiRows.length}
-                  text="Complaints that already contain saved multimodal AI outputs."
-                />
-                <MetricCard
-                  label="Thresholded conflicts"
-                  value={thresholdConflictCount}
-                  text="Complaints with stored threshold-based conflict evidence."
-                />
-                <MetricCard
-                  label="Area signal cases"
-                  value={areaSignalCount}
-                  text="Complaints where area repetition contributes to priority."
                 />
               </div>
             </section>
@@ -705,22 +650,21 @@ export default async function AuthorityPage() {
 
               <div className={styles.statStrip}>
                 <MetricCard
-                  label="Submitted"
-                  value={submittedCount}
-                  text="New complaints waiting in queue."
-                  href={buildComplaintsHref({ status: "submitted" })}
-                />
-                <MetricCard
-                  label="Processing"
-                  value={processingCount}
-                  text="Cases currently under authority handling."
-                  href={buildComplaintsHref({ status: "processing" })}
-                />
-                <MetricCard
                   label="Resolved"
-                  value={resolvedOnlyCount}
-                  text="Complaints marked resolved by authorities."
+                  value={resolvedCount}
+                  text="Complaints already closed by authority action."
                   href={buildComplaintsHref({ status: "resolved" })}
+                />
+                <MetricCard
+                  label="Conflict cases"
+                  value={conflictCount}
+                  text="Complaints where AI and complaint signals do not align cleanly."
+                  href={buildComplaintsHref({ review: "conflict" })}
+                />
+                <MetricCard
+                  label="Priority scored"
+                  value={priorityComputedCount}
+                  text="Complaints with computed queue position."
                 />
                 <MetricCard
                   label="Rejected"
@@ -736,7 +680,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Priority inbox</h2>
                   <p className={styles.sectionText}>
-                    Compact previews for urgent authority attention instead of full long queues.
+                    Compact previews for cases that need faster authority attention.
                   </p>
                 </div>
               </div>
@@ -744,46 +688,36 @@ export default async function AuthorityPage() {
               <div className={styles.dashboardInboxGrid}>
                 <InboxPanel
                   title="Manual review"
-                  subtitle="Complaints where AI suggestions should not be used without human verification."
+                  subtitle="Complaints where authority should verify the AI suggestion before acting."
                   emptyText="No manual-review complaints right now."
                   badgeClass={styles.chipWarn}
                   items={manualReviewComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
-                    const fusionConfidence = ai?.fusion_confidence;
-
                     return {
                       id: complaint.id,
                       title: complaint.title || "Untitled complaint",
                       meta: `${getAreaName(complaint)} • ${formatDate(
                         complaint.created_at
-                      )} • ${reliabilityLabel(reliability)} • Fusion ${nicePercent(
-                        fusionConfidence
-                      )}`,
+                      )} • ${reliabilityLabel(reliability)}`,
                       badge: "Review",
                     };
                   })}
                 />
 
                 <InboxPanel
-                  title="Conflict cases"
-                  subtitle="Complaints with category mismatch or signal disagreement that need closer inspection."
-                  emptyText="No conflict cases right now."
+                  title="Queue priority"
+                  subtitle="Complaints currently highest in the computed queue order."
+                  emptyText="No ranked complaints available right now."
                   badgeClass={styles.priorityMedium}
-                  items={conflictComplaints.map((complaint) => {
-                    const ai = inferenceByComplaint.get(complaint.id);
-                    const textThreshold = parseNumber(ai?.model_versions?.conflict_threshold_text);
-                    const imageThreshold = parseNumber(ai?.model_versions?.conflict_threshold_image);
-
-                    return {
-                      id: complaint.id,
-                      title: complaint.title || "Untitled complaint",
-                      meta: `${getAreaName(complaint)} • AI: ${
-                        ai?.fusion_label || "Pending"
-                      } • T ${nicePercent(textThreshold)} • I ${nicePercent(imageThreshold)}`,
-                      badge: "Conflict",
-                    };
-                  })}
+                  items={queueComplaints.map(({ complaint, ai, rank, escalation }) => ({
+                    id: complaint.id,
+                    title: complaint.title || "Untitled complaint",
+                    meta: `${getAreaName(complaint)} • Queue ${ordinal(rank)} • ${friendlyEscalation(
+                      escalation
+                    )} • ${confidenceLabel(ai?.fusion_confidence)}`,
+                    badge: ordinal(rank),
+                  }))}
                 />
 
                 <article className={styles.dashboardInboxCard}>
@@ -826,7 +760,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Recent complaints</h2>
                   <p className={styles.sectionText}>
-                    A shorter recent complaint preview list for daily review without crowding the dashboard.
+                    Recent complaint previews with only the values authorities actually need.
                   </p>
                   <div className={styles.complaintsFilterActions}>
                     <Link href="/authority/complaints" className={styles.primaryLink}>
@@ -849,10 +783,9 @@ export default async function AuthorityPage() {
                     const reliability = ai?.model_versions?.reliability_status ?? null;
                     const citizenAiConflict =
                       ai?.model_versions?.citizen_ai_conflict === "true";
-
-                    const textWeight = parseNumber(ai?.model_versions?.text_weight);
-                    const imageWeight = parseNumber(ai?.model_versions?.image_weight);
-                    const areaSignal = parseNumber(ai?.model_versions?.area_frequency_score);
+                    const priorityRank = parseNumber(ai?.model_versions?.priority_rank);
+                    const escalation =
+                      ai?.model_versions?.escalation_status || ai?.model_versions?.escalation || null;
 
                     return (
                       <article key={complaint.id} className={styles.dashboardQueueRow}>
@@ -879,27 +812,24 @@ export default async function AuthorityPage() {
                           </p>
 
                           <p className={styles.dashboardQueueSubMeta}>
-                            Fusion {nicePercent(ai?.fusion_confidence)} • Text{" "}
-                            {nicePercent(textWeight)} • Image {nicePercent(imageWeight)} • Area signal{" "}
-                            {areaSignal != null ? areaSignal.toFixed(3) : "Pending"}
+                            AI confidence {confidenceLabel(ai?.fusion_confidence)} •{" "}
+                            {priorityRank != null ? `Queue ${ordinal(priorityRank)}` : "Queue not computed"} •{" "}
+                            {friendlyEscalation(escalation)}
                           </p>
+
+                          {ai?.summary ? (
+                            <p className={styles.dashboardQueueSubMeta}>
+                              {shortenText(ai.summary, 150)}
+                            </p>
+                          ) : null}
 
                           <div className={styles.chipRow}>
                             <span className={styles.chip}>
-                              Final: {complaint.final_category || "Not set"}
-                            </span>
-                            <span className={styles.chip}>
-                              AI: {ai?.fusion_label || "Pending"}
-                            </span>
-                            <span className={priorityClass(ai?.priority)}>
-                              Priority: {ai?.priority || "Pending"}
+                              AI: {ai?.fusion_label || "Not available"}
                             </span>
                             <span className={reliabilityClass(reliability)}>
                               {reliabilityLabel(reliability)}
                             </span>
-                            {ai?.conflict_flag ? (
-                              <span className={styles.chipWarn}>Text/Image conflict</span>
-                            ) : null}
                             {citizenAiConflict ? (
                               <span className={styles.chipWarn}>Citizen/AI mismatch</span>
                             ) : null}

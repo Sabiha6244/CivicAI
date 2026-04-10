@@ -32,6 +32,7 @@ type InferenceRow = {
   fusion_confidence: number | null;
   priority: string | null;
   conflict_flag: boolean | null;
+  summary: string | null;
   model_versions: Record<string, string> | null;
 };
 
@@ -67,29 +68,12 @@ function statusClass(status: string) {
   }
 }
 
-function priorityClass(priority?: string | null) {
-  switch (priority) {
-    case "high":
-      return styles.priorityHigh;
-    case "medium":
-      return styles.priorityMedium;
-    case "low":
-      return styles.priorityLow;
-    default:
-      return styles.chip;
-  }
-}
-
 function reliabilityClass(value?: string | null) {
   switch (value) {
     case "reliable":
       return styles.priorityLow;
-    case "needs_review":
+    case "manual_review_needed":
       return styles.chipWarn;
-    case "low_confidence":
-      return styles.chipWarn;
-    case "conflict_detected":
-      return styles.priorityMedium;
     case "insufficient_evidence":
       return styles.priorityHigh;
     default:
@@ -101,16 +85,12 @@ function reliabilityLabel(value?: string | null) {
   switch (value) {
     case "reliable":
       return "Reliable";
-    case "needs_review":
-      return "Needs review";
-    case "low_confidence":
-      return "Low confidence";
-    case "conflict_detected":
-      return "Conflict";
+    case "manual_review_needed":
+      return "Manual review needed";
     case "insufficient_evidence":
       return "Insufficient evidence";
     default:
-      return "Pending";
+      return "Not available";
   }
 }
 
@@ -120,9 +100,55 @@ function parseNumber(value?: string | null) {
   return Number.isFinite(num) ? num : null;
 }
 
+function parseBoolean(value?: string | null) {
+  if (!value) return false;
+  return value.toLowerCase() === "true";
+}
+
 function nicePercent(value?: number | null) {
-  if (value == null) return "Pending";
+  if (value == null) return "N/A";
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function confidenceLabel(value?: number | null) {
+  if (value == null) return "Not available";
+  if (value >= 0.85) return `High (${nicePercent(value)})`;
+  if (value >= 0.6) return `Moderate (${nicePercent(value)})`;
+  return `Low (${nicePercent(value)})`;
+}
+
+function ordinal(value?: number | null) {
+  if (value == null) return "N/A";
+  const v = Math.abs(value);
+  const mod10 = v % 10;
+  const mod100 = v % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${value}st`;
+  if (mod10 === 2 && mod100 !== 12) return `${value}nd`;
+  if (mod10 === 3 && mod100 !== 13) return `${value}rd`;
+  return `${value}th`;
+}
+
+function friendlyEscalation(value?: string | null) {
+  switch (value) {
+    case "escalate_now":
+      return "Needs escalation now";
+    case "within_threshold":
+      return "Within response window";
+    default:
+      return "Not available";
+  }
+}
+
+function shortenText(text?: string | null, max = 140) {
+  if (!text) return "";
+  const clean = text.trim().replace(/\s+/g, " ");
+  if (clean.length <= max) return clean;
+
+  const sliced = clean.slice(0, max);
+  const lastSpace = sliced.lastIndexOf(" ");
+  const shortened = lastSpace > 0 ? sliced.slice(0, lastSpace) : sliced;
+
+  return `${shortened}...`;
 }
 
 function matchesStatusFilter(filterValue: string, statusValue: string) {
@@ -284,6 +310,7 @@ export default async function AuthorityComplaintsPage({
         fusion_confidence,
         priority,
         conflict_flag,
+        summary,
         model_versions
       `)
       .in("complaint_id", complaintIds);
@@ -302,13 +329,18 @@ export default async function AuthorityComplaintsPage({
   const filteredComplaints = complaints.filter((complaint) => {
     const ai = inferenceByComplaint.get(complaint.id);
     const reliability = ai?.model_versions?.reliability_status ?? null;
-    const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
-    const manualReviewRequired = ai?.model_versions?.manual_review_required === "true";
+    const citizenAiConflict = parseBoolean(ai?.model_versions?.citizen_ai_conflict);
+    const manualReviewRequired = parseBoolean(
+      ai?.model_versions?.manual_review_required
+    );
+    const priorityRank = parseNumber(ai?.model_versions?.priority_rank);
+    const escalationStatus =
+      ai?.model_versions?.escalation_status || ai?.model_versions?.escalation || null;
 
     const derivedCategory =
       complaint.final_category ||
-      complaint.user_category ||
       ai?.fusion_label ||
+      complaint.user_category ||
       "Uncategorized";
 
     const derivedArea = getAreaName(complaint);
@@ -331,7 +363,8 @@ export default async function AuthorityComplaintsPage({
       selectedReview === "all" ||
       (selectedReview === "manual_review" && manualReviewRequired) ||
       (selectedReview === "conflict" && (!!ai?.conflict_flag || citizenAiConflict)) ||
-      (selectedReview === "high_priority" && ai?.priority === "high") ||
+      (selectedReview === "high_priority" &&
+        (priorityRank != null ? priorityRank <= 5 : escalationStatus === "escalate_now")) ||
       (selectedReview === "reliable" && reliability === "reliable");
 
     const matchesCategory =
@@ -429,7 +462,7 @@ export default async function AuthorityComplaintsPage({
               <p className={styles.subtitle}>
                 {sourceContext === "analytics"
                   ? "A filtered operational queue opened from analytics, so authorities can move directly from pattern discovery into complaint review."
-                  : "A structured complaint management page for reviewing new, old, unresolved, and flagged complaints without overloading the dashboard."}
+                  : "A structured complaint management page for reviewing new, unresolved, and flagged complaints without overloading the dashboard."}
               </p>
 
               <div className={styles.statStrip}>
@@ -571,7 +604,7 @@ export default async function AuthorityComplaintsPage({
                       <option value="all">All complaints</option>
                       <option value="manual_review">Manual review</option>
                       <option value="conflict">Conflict cases</option>
-                      <option value="high_priority">High priority</option>
+                      <option value="high_priority">Top queue / urgent</option>
                       <option value="reliable">Reliable AI result</option>
                     </select>
                   </div>
@@ -597,7 +630,7 @@ export default async function AuthorityComplaintsPage({
                 <div>
                   <h2 className={styles.sectionTitle}>Complaint list</h2>
                   <p className={styles.sectionText}>
-                    Compact operational list with image preview, review flags, and direct access to complaint detail.
+                    Compact operational list with image preview, authority-friendly AI guidance, and direct access to complaint detail.
                   </p>
                 </div>
               </div>
@@ -610,20 +643,28 @@ export default async function AuthorityComplaintsPage({
                     const ai = inferenceByComplaint.get(complaint.id);
                     const media = mediaByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
-                    const citizenAiConflict =
-                      ai?.model_versions?.citizen_ai_conflict === "true";
-                    const manualReviewRequired =
-                      ai?.model_versions?.manual_review_required === "true";
+                    const citizenAiConflict = parseBoolean(
+                      ai?.model_versions?.citizen_ai_conflict
+                    );
+                    const manualReviewRequired = parseBoolean(
+                      ai?.model_versions?.manual_review_required
+                    );
+                    const priorityRank = parseNumber(ai?.model_versions?.priority_rank);
+                    const escalationStatus =
+                      ai?.model_versions?.escalation_status ||
+                      ai?.model_versions?.escalation ||
+                      null;
 
                     const derivedCategory =
                       complaint.final_category ||
-                      complaint.user_category ||
                       ai?.fusion_label ||
+                      complaint.user_category ||
                       "Uncategorized";
 
-                    const textWeight = parseNumber(ai?.model_versions?.text_weight);
-                    const imageWeight = parseNumber(ai?.model_versions?.image_weight);
-                    const areaSignal = parseNumber(ai?.model_versions?.area_frequency_score);
+                    const readableSummary = shortenText(
+                      ai?.summary || complaint.description,
+                      150
+                    );
 
                     return (
                       <article key={complaint.id} className={styles.complaintsManagementRow}>
@@ -650,10 +691,17 @@ export default async function AuthorityComplaintsPage({
                           </p>
 
                           <p className={styles.complaintsManagementSubMeta}>
-                            Category: {derivedCategory} • Fusion {nicePercent(ai?.fusion_confidence)} •
-                            Text {nicePercent(textWeight)} • Image {nicePercent(imageWeight)} •
-                            Area signal {areaSignal != null ? areaSignal.toFixed(3) : "Pending"}
+                            Suggested category: {ai?.fusion_label || "Not available"} • AI confidence:{" "}
+                            {confidenceLabel(ai?.fusion_confidence)} • Queue:{" "}
+                            {priorityRank != null ? ordinal(priorityRank) : "Not computed"} •{" "}
+                            {friendlyEscalation(escalationStatus)}
                           </p>
+
+                          {readableSummary ? (
+                            <p className={styles.complaintsManagementSubMeta}>
+                              {readableSummary}
+                            </p>
+                          ) : null}
 
                           <div className={styles.chipRow}>
                             <span className={styles.chip}>
@@ -663,10 +711,7 @@ export default async function AuthorityComplaintsPage({
                               Final: {complaint.final_category || "Not set"}
                             </span>
                             <span className={styles.chip}>
-                              AI: {ai?.fusion_label || "Pending"}
-                            </span>
-                            <span className={priorityClass(ai?.priority)}>
-                              Priority: {ai?.priority || "Pending"}
+                              Category shown: {derivedCategory}
                             </span>
                             <span className={reliabilityClass(reliability)}>
                               {reliabilityLabel(reliability)}

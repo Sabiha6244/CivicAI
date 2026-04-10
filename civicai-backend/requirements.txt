@@ -11,3 +11,4 @@ transformers
 safetensors
 tokenizers
 ultralytics
+vaderSentiment

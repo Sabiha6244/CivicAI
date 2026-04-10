@@ -23,7 +23,6 @@ type InferenceRow = {
   complaint_id: string;
   fusion_label: string | null;
   fusion_confidence: number | null;
-  priority: string | null;
   conflict_flag: boolean | null;
   model_versions: Record<string, string> | null;
 };
@@ -50,10 +49,9 @@ function niceLabel(value: string) {
     .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-function parseNumber(value?: string | null) {
-  if (!value) return null;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+function parseBoolean(value?: string | null) {
+  if (!value) return false;
+  return value.toLowerCase() === "true";
 }
 
 function average(values: number[]) {
@@ -62,13 +60,15 @@ function average(values: number[]) {
 }
 
 function nicePercent(value?: number | null) {
-  if (value == null) return "Pending";
+  if (value == null) return "N/A";
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function niceScore(value?: number | null) {
-  if (value == null) return "Pending";
-  return value.toFixed(3);
+function confidenceLabel(value?: number | null) {
+  if (value == null) return "Not available";
+  if (value >= 0.85) return `High (${nicePercent(value)})`;
+  if (value >= 0.6) return `Moderate (${nicePercent(value)})`;
+  return `Low (${nicePercent(value)})`;
 }
 
 function countMapToSortedList(
@@ -360,7 +360,6 @@ export default async function AuthorityAnalyticsPage() {
         complaint_id,
         fusion_label,
         fusion_confidence,
-        priority,
         conflict_flag,
         model_versions
       `)
@@ -377,12 +376,14 @@ export default async function AuthorityAnalyticsPage() {
   const categoryCounts = new Map<string, number>();
   const areaCounts = new Map<string, number>();
   const repeatedPatternCounts = new Map<string, number>();
-  const priorityCounts = new Map<string, number>();
   const clusterCounts = new Map<string, number>();
 
   let manualReviewCount = 0;
+  let reliableCount = 0;
   let conflictCount = 0;
   let duplicateLinkedCount = 0;
+  let priorityComputedCount = 0;
+  let escalateNowCount = 0;
 
   for (const complaint of complaints) {
     const ai = inferenceByComplaint.get(complaint.id);
@@ -392,8 +393,8 @@ export default async function AuthorityAnalyticsPage() {
 
     const category =
       complaint.final_category ||
-      complaint.user_category ||
       ai?.fusion_label ||
+      complaint.user_category ||
       "Uncategorized";
     categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
 
@@ -406,9 +407,6 @@ export default async function AuthorityAnalyticsPage() {
       (repeatedPatternCounts.get(repeatedKey) ?? 0) + 1
     );
 
-    const priority = ai?.priority || "pending";
-    priorityCounts.set(priority, (priorityCounts.get(priority) ?? 0) + 1);
-
     if (complaint.cluster_id) {
       clusterCounts.set(
         complaint.cluster_id,
@@ -420,13 +418,35 @@ export default async function AuthorityAnalyticsPage() {
       duplicateLinkedCount += 1;
     }
 
-    if (ai?.model_versions?.manual_review_required === "true") {
+    const reliabilityStatus = ai?.model_versions?.reliability_status;
+    const manualReviewRequired = parseBoolean(
+      ai?.model_versions?.manual_review_required
+    );
+    const citizenAiConflict = parseBoolean(
+      ai?.model_versions?.citizen_ai_conflict
+    );
+    const priorityStatus = ai?.model_versions?.priority_status;
+    const escalationStatus =
+      ai?.model_versions?.escalation_status || ai?.model_versions?.escalation;
+
+    if (reliabilityStatus === "reliable") {
+      reliableCount += 1;
+    }
+
+    if (manualReviewRequired) {
       manualReviewCount += 1;
     }
 
-    const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
     if (ai?.conflict_flag || citizenAiConflict) {
       conflictCount += 1;
+    }
+
+    if (priorityStatus === "computed") {
+      priorityComputedCount += 1;
+    }
+
+    if (escalationStatus === "escalate_now") {
+      escalateNowCount += 1;
     }
   }
 
@@ -445,7 +465,6 @@ export default async function AuthorityAnalyticsPage() {
     totalComplaints,
     10
   );
-  const topPriorities = countMapToSortedList(priorityCounts, totalComplaints, 5);
 
   const statusChartItems = [
     { label: "submitted", count: submittedCount, share: 0 },
@@ -459,33 +478,9 @@ export default async function AuthorityAnalyticsPage() {
       share: totalComplaints > 0 ? (item.count / totalComplaints) * 100 : 0,
     }));
 
-  const categoryChartItems = topCategories.slice(0, 5);
-  const priorityChartItems = topPriorities.slice(0, 5);
-  const repeatedClusterGroups = Array.from(clusterCounts.values()).filter(
-    (count) => count > 1
-  ).length;
-
   const aiRows = complaints
     .map((complaint) => inferenceByComplaint.get(complaint.id))
     .filter((item): item is InferenceRow => Boolean(item));
-
-  const adaptiveFusionCount = aiRows.filter((row) => {
-    const strategy = row.model_versions?.fusion_strategy || "";
-    const textWeight = parseNumber(row.model_versions?.text_weight);
-    const imageWeight = parseNumber(row.model_versions?.image_weight);
-    return strategy.includes("adaptive") || textWeight != null || imageWeight != null;
-  }).length;
-
-  const areaSignalCount = aiRows.filter((row) => {
-    const score = parseNumber(row.model_versions?.area_frequency_score);
-    return score != null && score > 0;
-  }).length;
-
-  const thresholdConflictCount = aiRows.filter((row) => {
-    const textThreshold = parseNumber(row.model_versions?.conflict_threshold_text);
-    const imageThreshold = parseNumber(row.model_versions?.conflict_threshold_image);
-    return textThreshold != null && imageThreshold != null;
-  }).length;
 
   const avgFusionConfidence = average(
     aiRows
@@ -493,23 +488,9 @@ export default async function AuthorityAnalyticsPage() {
       .filter((value): value is number => value != null)
   );
 
-  const avgTextWeight = average(
-    aiRows
-      .map((row) => parseNumber(row.model_versions?.text_weight))
-      .filter((value): value is number => value != null)
-  );
-
-  const avgImageWeight = average(
-    aiRows
-      .map((row) => parseNumber(row.model_versions?.image_weight))
-      .filter((value): value is number => value != null)
-  );
-
-  const avgAreaFrequency = average(
-    aiRows
-      .map((row) => parseNumber(row.model_versions?.area_frequency_score))
-      .filter((value): value is number => value != null)
-  );
+  const repeatedClusterGroups = Array.from(clusterCounts.values()).filter(
+    (count) => count > 1
+  ).length;
 
   return (
     <main className={styles.page}>
@@ -520,8 +501,8 @@ export default async function AuthorityAnalyticsPage() {
               <p className={styles.sidebarEyebrow}>Authority workspace</p>
               <h2 className={styles.sidebarTitle}>Analytics</h2>
               <p className={styles.sidebarText}>
-                Review complaint patterns, charts, hotspots, and grouped issue
-                intelligence in a cleaner analytics workspace.
+                Review complaint patterns, hotspots, category trends, and AI review
+                signals in a cleaner analytics workspace.
               </p>
 
               <nav className={styles.sidebarNav}>
@@ -543,9 +524,8 @@ export default async function AuthorityAnalyticsPage() {
               <p className={styles.eyebrow}>Authority analytics workspace</p>
               <h1 className={styles.title}>Complaint analytics and issue insights</h1>
               <p className={styles.subtitle}>
-                A more standard and user-friendly analytics dashboard for hosted
-                deployment, with clearer charts, compact category cards, and
-                cleaner drill-down navigation into the operational complaints queue.
+                A clearer analytics dashboard for operational trends, priority
+                visibility, and category or area drill-downs into the complaints queue.
               </p>
 
               <div className={styles.statStrip}>
@@ -558,20 +538,18 @@ export default async function AuthorityAnalyticsPage() {
                 <MetricCard
                   label="Open cases"
                   value={openCount}
-                  text="Submitted and processing complaints needing action."
-                  href={buildComplaintsHref({ status: "open" })}
+                  text="Submitted and processing complaints still needing action."
+                />
+                <MetricCard
+                  label="Reliable AI"
+                  value={reliableCount}
+                  text="Complaints where AI can be used as a strong starting point."
                 />
                 <MetricCard
                   label="Manual review"
                   value={manualReviewCount}
-                  text="Cases flagged for authority verification."
+                  text="Cases flagged for careful authority verification."
                   href={buildComplaintsHref({ review: "manual_review" })}
-                />
-                <MetricCard
-                  label="Conflict cases"
-                  value={conflictCount}
-                  text="Signal disagreement or citizen-AI mismatch."
-                  href={buildComplaintsHref({ review: "conflict" })}
                 />
               </div>
             </section>
@@ -579,9 +557,9 @@ export default async function AuthorityAnalyticsPage() {
             <section className={styles.section}>
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Backend evidence overview</h2>
+                  <h2 className={styles.sectionTitle}>AI review insights</h2>
                   <p className={styles.sectionText}>
-                    Analytics for the upgraded multimodal backend and publication-facing AI signals.
+                    High-level AI performance signals that authorities can understand quickly.
                   </p>
                 </div>
 
@@ -592,50 +570,53 @@ export default async function AuthorityAnalyticsPage() {
 
               <div className={styles.summaryGrid}>
                 <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Adaptive fusion used</p>
-                  <h3 className={styles.summaryValue}>{adaptiveFusionCount}</h3>
+                  <p className={styles.summaryLabel}>Average AI confidence</p>
+                  <h3 className={styles.summaryValue}>
+                    {confidenceLabel(avgFusionConfidence)}
+                  </h3>
                   <p className={styles.summaryText}>
-                    Complaints that already contain adaptive text-image weighting evidence.
+                    Average confidence of saved AI category suggestions.
                   </p>
                 </div>
 
                 <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Average fusion confidence</p>
-                  <h3 className={styles.summaryValue}>{nicePercent(avgFusionConfidence)}</h3>
+                  <p className={styles.summaryLabel}>Priority computed</p>
+                  <h3 className={styles.summaryValue}>{priorityComputedCount}</h3>
                   <p className={styles.summaryText}>
-                    Mean fused confidence across complaints with stored AI results.
+                    Complaints with a computed queue position from the current priority logic.
                   </p>
                 </div>
 
                 <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Area repetition signal</p>
-                  <h3 className={styles.summaryValue}>{areaSignalCount}</h3>
+                  <p className={styles.summaryLabel}>Needs escalation now</p>
+                  <h3 className={styles.summaryValue}>{escalateNowCount}</h3>
                   <p className={styles.summaryText}>
-                    Complaints where same-area repetition contributes to priority scoring.
+                    Complaints that have exceeded the current response window.
                   </p>
                 </div>
               </div>
 
               <div className={styles.statStrip}>
                 <MetricCard
-                  label="Average text weight"
-                  value={nicePercent(avgTextWeight)}
-                  text="Mean contribution of the text branch in adaptive fusion."
+                  label="Conflict cases"
+                  value={conflictCount}
+                  text="Cases where AI and complaint signals do not align cleanly."
+                  href={buildComplaintsHref({ review: "conflict" })}
                 />
                 <MetricCard
-                  label="Average image weight"
-                  value={nicePercent(avgImageWeight)}
-                  text="Mean contribution of the image branch in adaptive fusion."
+                  label="Duplicate linked"
+                  value={duplicateLinkedCount}
+                  text="Complaints already linked to another complaint."
                 />
                 <MetricCard
-                  label="Thresholded conflict"
-                  value={thresholdConflictCount}
-                  text="Complaints with stored conflict-threshold evidence."
+                  label="Repeated clusters"
+                  value={repeatedClusterGroups}
+                  text="Cluster groups containing more than one complaint."
                 />
                 <MetricCard
-                  label="Average area score"
-                  value={niceScore(avgAreaFrequency)}
-                  text="Mean area-frequency contribution in the current analytics scope."
+                  label="Avg confidence"
+                  value={nicePercent(avgFusionConfidence)}
+                  text="Average saved fusion confidence across AI-scored complaints."
                 />
               </div>
             </section>
@@ -645,7 +626,7 @@ export default async function AuthorityAnalyticsPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Operational charts</h2>
                   <p className={styles.sectionText}>
-                    Status flow, category spread, and priority distribution from the current complaint data.
+                    Status flow, category spread, and area concentration from the current complaint data.
                   </p>
                 </div>
               </div>
@@ -659,21 +640,21 @@ export default async function AuthorityAnalyticsPage() {
 
                 <BarChart
                   title="Top complaint categories"
-                  items={categoryChartItems}
+                  items={topCategories.slice(0, 5)}
                   fillClass={styles.analyticsChartFillBlue}
                 />
               </div>
 
               <div className={styles.analyticsChartGrid}>
                 <BarChart
-                  title="Priority bucket distribution"
-                  items={priorityChartItems}
+                  title="Top affected areas"
+                  items={topAreas.slice(0, 5)}
                   fillClass={styles.analyticsChartFillTeal}
                 />
 
                 <BarChart
-                  title="Top affected areas"
-                  items={topAreas.slice(0, 5)}
+                  title="Repeated issue patterns"
+                  items={repeatedPatterns.slice(0, 5)}
                   fillClass={styles.analyticsChartFillBlue}
                 />
               </div>
@@ -688,14 +669,13 @@ export default async function AuthorityAnalyticsPage() {
                 <MetricCard
                   label="Processing"
                   value={processingCount}
-                  text="Cases under authority handling."
+                  text="Cases currently under authority handling."
                   href={buildComplaintsHref({ status: "processing" })}
                 />
                 <MetricCard
                   label="Resolved / Completed"
                   value={resolvedCombinedCount}
-                  text="Resolved and completed issues."
-                  href={buildComplaintsHref({ status: "resolved_all" })}
+                  text="Issues already closed by authority action."
                 />
                 <MetricCard
                   label="Rejected"
@@ -743,45 +723,6 @@ export default async function AuthorityAnalyticsPage() {
               </div>
 
               <MiniCardGrid items={repeatedPatterns} type="pattern" />
-            </section>
-
-            <section className={styles.section}>
-              <div className={styles.sectionHeader}>
-                <div>
-                  <h2 className={styles.sectionTitle}>Duplicate and cluster intelligence</h2>
-                  <p className={styles.sectionText}>
-                    Additional repeated-issue evidence using duplicate references and cluster groups.
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles.summaryGrid}>
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Duplicate linked</p>
-                  <h3 className={styles.summaryValue}>{duplicateLinkedCount}</h3>
-                  <p className={styles.summaryText}>
-                    Complaints already linked to another complaint.
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Repeated clusters</p>
-                  <h3 className={styles.summaryValue}>{repeatedClusterGroups}</h3>
-                  <p className={styles.summaryText}>
-                    Cluster groups containing more than one complaint.
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Top priority bucket</p>
-                  <h3 className={styles.summaryValue}>
-                    {topPriorities.length > 0 ? niceLabel(topPriorities[0].label) : "N/A"}
-                  </h3>
-                  <p className={styles.summaryText}>
-                    Highest-count priority bucket in the current dataset.
-                  </p>
-                </div>
-              </div>
             </section>
           </div>
         </section>

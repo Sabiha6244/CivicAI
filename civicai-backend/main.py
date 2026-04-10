@@ -8,9 +8,8 @@ import smtplib
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal, TypedDict
 
-import numpy as np
 import requests
 import torch
 from PIL import Image
@@ -20,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from ultralytics import YOLO
+
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 load_dotenv()
 
@@ -37,30 +38,12 @@ GMAIL_SENDER_NAME = os.getenv("GMAIL_SENDER_NAME", "CivicAI")
 
 INFERENCE_IMAGE_BUCKET = os.getenv("SUPABASE_INFERENCE_IMAGE_BUCKET", "complaint-images")
 
+SENTIMENT_ANALYZER = SentimentIntensityAnalyzer()
+
+
 OTP_TTL_MINUTES = 10
 OTP_COOLDOWN_SECONDS = 60
 MAX_ATTEMPTS = 5
-
-# Neutral adaptive-fusion defaults.
-# These do not hard-code a preferred modality the way 0.6 / 0.4 did.
-FUSION_ALPHA_TEXT = 1.0
-FUSION_ALPHA_IMAGE = 1.0
-
-# Conservative disagreement thresholds.
-# Tune these later on a validation split for the paper.
-CONFLICT_TEXT_THRESHOLD = 0.55
-CONFLICT_IMAGE_THRESHOLD = 0.35
-
-# Priority-scoring defaults aligned with the methodology.
-RECENCY_BETA = 0.08
-AREA_FREQUENCY_WINDOW_DAYS = 30
-AREA_FREQUENCY_SATURATION_COUNT = 5
-
-# Reliability / review thresholds.
-LOW_TEXT_CONFIDENCE_THRESHOLD = 0.45
-LOW_IMAGE_CONFIDENCE_THRESHOLD = 0.30
-LOW_FUSION_CONFIDENCE_THRESHOLD = 0.45
-NEEDS_REVIEW_FUSION_THRESHOLD = 0.75
 
 EPSILON = 1e-8
 
@@ -70,7 +53,21 @@ TEXT_META: dict[str, Any] | None = None
 YOLO_MODEL = None
 YOLO_CLASS_NAMES: list[str] = []
 
-IMAGE_TO_CIVIC_LABEL = {
+# -----------------------------
+# Shared fusion space
+# -----------------------------
+SHARED_FUSION_LABELS = [
+    "Community Infrastructure and Services",
+    "Crime and Safety",
+    "Electricity and Power Supply",
+    "Garbage and Unsanitary Practices",
+    "Mobility - Roads, Footpaths and Infrastructure",
+    "Pollution",
+    "Traffic and Road Safety",
+    "Trees and Saplings",
+]
+
+IMAGE_TO_SHARED_LABEL = {
     "Damaged Road issues": "Mobility - Roads, Footpaths and Infrastructure",
     "Pothole Issues": "Mobility - Roads, Footpaths and Infrastructure",
     "Illegal Parking Issues": "Traffic and Road Safety",
@@ -82,6 +79,31 @@ IMAGE_TO_CIVIC_LABEL = {
     "Damaged concrete structures": "Community Infrastructure and Services",
     "Damaged Electric wires and poles": "Electricity and Power Supply",
 }
+
+TEXT18_TO_SHARED_LABEL = {
+    "Animal Husbandry": None,
+    "Certificates": None,
+    "Community Infrastructure and Services": "Community Infrastructure and Services",
+    "Crime and Safety": "Crime and Safety",
+    "Electricity and Power Supply": "Electricity and Power Supply",
+    "Garbage and Unsanitary Practices": "Garbage and Unsanitary Practices",
+    "Lakes": None,
+    "Mobility - Roads, Footpaths and Infrastructure": "Mobility - Roads, Footpaths and Infrastructure",
+    "Mobility - Roads, Public transport": None,
+    "Parks & Recreation": None,
+    "Pollution": "Pollution",
+    "Public Toilets": None,
+    "Sewerage Systems": None,
+    "Storm Water Drains": None,
+    "Streetlights": None,
+    "Traffic and Road Safety": "Traffic and Road Safety",
+    "Trees and Saplings": "Trees and Saplings",
+    "Water Supply and Services": None,
+}
+
+TEXT_ONLY_LABELS = [
+    label for label, mapped in TEXT18_TO_SHARED_LABEL.items() if mapped is None
+]
 
 CITIZEN_TO_INTERNAL_CATEGORY = {
     "Garbage / Waste": "Garbage and Unsanitary Practices",
@@ -98,63 +120,16 @@ CITIZEN_TO_INTERNAL_CATEGORY = {
     "Other": "Other",
 }
 
-CATEGORY_SEVERITY = {
-    "Crime and Safety": 0.183,
-    "Electricity and Power Supply": 0.163,
-    "Traffic and Road Safety": 0.153,
-    "Streetlights": 0.153,
-    "Mobility - Roads, Footpaths and Infrastructure": 0.153,
-    "Mobility - Roads, Public transport": 0.153,
-    "Water Supply and Services": 0.155,
-    "Sewerage Systems": 0.155,
-    "Storm Water Drains": 0.155,
-    "Garbage and Unsanitary Practices": 0.123,
-    "Pollution": 0.123,
-    "Public Toilets": 0.123,
-    "Community Infrastructure and Services": 0.093,
-    "Certificates": 0.093,
-    "Animal Husbandry": 0.093,
-    "Trees and Saplings": 0.088,
-    "Parks & Recreation": 0.088,
-    "Lakes": 0.088,
-    "Other": 0.042,
-    "Uncategorized": 0.042,
-}
 
-SEVERITY_SCALE_MIN = 0.20
-SEVERITY_SCALE_MAX = 1.00
-
-PRIORITY_WEIGHT_SEVERITY = 0.49
-PRIORITY_WEIGHT_FREQUENCY = 0.22
-PRIORITY_WEIGHT_RECENCY = 0.14
-PRIORITY_WEIGHT_CONFIDENCE = 0.09
-PRIORITY_WEIGHT_CONFLICT = 0.07
+CriterionType = Literal["benefit", "cost"]
 
 
-def get_scaled_severity(label: Optional[str]) -> Dict[str, float]:
-    raw_value = float(
-        CATEGORY_SEVERITY.get(
-            label or "Uncategorized",
-            CATEGORY_SEVERITY["Uncategorized"],
-        )
-    )
+class SawCriterion(TypedDict):
+    name: str
+    field: str
+    type: CriterionType
+    weight: float
 
-    all_values = list(CATEGORY_SEVERITY.values())
-    min_value = min(all_values)
-    max_value = max(all_values)
-
-    if max_value - min_value <= EPSILON:
-        scaled_value = raw_value
-    else:
-        normalized = (raw_value - min_value) / (max_value - min_value)
-        scaled_value = SEVERITY_SCALE_MIN + normalized * (
-            SEVERITY_SCALE_MAX - SEVERITY_SCALE_MIN
-        )
-
-    return {
-        "raw": safe_float(raw_value),
-        "scaled": safe_float(scaled_value),
-    }
 
 app = FastAPI()
 
@@ -257,15 +232,6 @@ def build_in_filter(values: list[str]) -> str:
     return f"in.({','.join(clean_values)})"
 
 
-def get_primary_area_field_and_value(complaint: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    for field in ("city_area", "upazila", "district", "address_label"):
-        raw = complaint.get(field)
-        value = normalize_text(raw or "")
-        if value:
-            return field, value
-    return None, None
-
-
 def serialize_model_versions(data: Dict[str, Any]) -> Dict[str, str]:
     serialized: Dict[str, str] = {}
     for key, value in data.items():
@@ -280,6 +246,99 @@ def serialize_model_versions(data: Dict[str, Any]) -> Dict[str, str]:
         else:
             serialized[key] = str(value)
     return serialized
+
+
+def get_required_float_env(name: str) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing required environment variable: {name}"
+        )
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Environment variable {name} must be a float."
+        ) from e
+
+
+def get_required_json_env(name: str) -> Any:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing required environment variable: {name}"
+        )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Environment variable {name} must contain valid JSON."
+        ) from e
+
+
+def get_fusion_weights() -> tuple[float, float]:
+    text_weight = get_required_float_env("CIVICAI_FUSION_TEXT_WEIGHT")
+    image_weight = get_required_float_env("CIVICAI_FUSION_IMAGE_WEIGHT")
+    denom = text_weight + image_weight
+    if denom <= EPSILON:
+        raise HTTPException(
+            status_code=500,
+            detail="CIVICAI_FUSION_TEXT_WEIGHT + CIVICAI_FUSION_IMAGE_WEIGHT must be positive."
+        )
+    return text_weight, image_weight
+
+
+def get_escalation_threshold_hours() -> float:
+    threshold = get_required_float_env("CIVICAI_ESCALATION_THRESHOLD_HOURS")
+    if threshold <= 0:
+        raise HTTPException(
+            status_code=500,
+            detail="CIVICAI_ESCALATION_THRESHOLD_HOURS must be positive."
+        )
+    return threshold
+
+
+def get_saw_criteria() -> list[SawCriterion]:
+    criteria = get_required_json_env("CIVICAI_SAW_CRITERIA_JSON")
+    if not isinstance(criteria, list) or not criteria:
+        raise HTTPException(
+            status_code=500,
+            detail="CIVICAI_SAW_CRITERIA_JSON must be a non-empty JSON list."
+        )
+
+    total_weight = 0.0
+    normalized_criteria: list[SawCriterion] = []
+    for item in criteria:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Each SAW criterion must be a JSON object."
+            )
+        if item.get("type") not in {"benefit", "cost"}:
+            raise HTTPException(
+                status_code=500,
+                detail="SAW criterion type must be 'benefit' or 'cost'."
+            )
+        criterion: SawCriterion = {
+            "name": str(item["name"]),
+            "field": str(item["field"]),
+            "type": item["type"],
+            "weight": float(item["weight"]),
+        }
+        total_weight += float(criterion["weight"])
+        normalized_criteria.append(criterion)
+
+    if total_weight <= EPSILON:
+        raise HTTPException(
+            status_code=500,
+            detail="Sum of SAW criterion weights must be positive."
+        )
+
+    return normalized_criteria
 
 
 # ---------- email ----------
@@ -396,12 +455,7 @@ def sb_upsert_profile_verified(user_id: str):
 def get_complaint_row(complaint_id: str) -> Dict[str, Any]:
     params = {
         "id": f"eq.{complaint_id}",
-        "select": (
-            "id,title,description,status,created_at,"
-            "user_category,final_category,category_source,"
-            "division,district,upazila,city_area,address_label,"
-            "lat,lng,location_details"
-        ),
+        "select": "*",
         "limit": "1",
     }
     r = rest_get("complaints", params=params)
@@ -454,6 +508,23 @@ def get_existing_inference_result(complaint_id: str) -> Optional[Dict[str, Any]]
     return rows[0] if rows else None
 
 
+def fetch_existing_inference_results_for_complaints(complaint_ids: list[str]) -> dict[str, Dict[str, Any]]:
+    if not complaint_ids:
+        return {}
+
+    params = {
+        "complaint_id": build_in_filter(complaint_ids),
+        "select": "complaint_id,fusion_confidence,fusion_label",
+        "limit": "500",
+    }
+    r = rest_get("inference_results", params=params)
+    if r.status_code != 200:
+        return {}
+
+    rows = r.json() or []
+    return {str(row.get("complaint_id")): row for row in rows if row.get("complaint_id")}
+
+
 def get_text_label_order(meta: dict[str, Any]) -> list[str]:
     id2label = meta.get("id2label", {})
     if not id2label:
@@ -485,118 +556,6 @@ def normalize_score_dict(
     return {label: value / total for label, value in clean_scores.items()}
 
 
-def recency_score(created_at_value: Optional[str]) -> float:
-    if not created_at_value:
-        return 0.5
-
-    try:
-        created_dt = datetime.fromisoformat(created_at_value.replace("Z", "+00:00"))
-        days_old = max(0.0, (utc_now() - created_dt).total_seconds() / 86400.0)
-    except Exception:
-        return 0.5
-
-    return safe_float(np.exp(-RECENCY_BETA * days_old), digits=6)
-
-
-def fetch_inference_label_map(complaint_ids: list[str]) -> dict[str, Optional[str]]:
-    if not complaint_ids:
-        return {}
-
-    params = {
-        "complaint_id": build_in_filter(complaint_ids),
-        "select": "complaint_id,fusion_label",
-    }
-    r = rest_get("inference_results", params=params)
-    if r.status_code != 200:
-        return {}
-
-    rows = r.json()
-    return {str(row.get("complaint_id")): row.get("fusion_label") for row in rows}
-
-
-def infer_existing_category(
-    complaint_row: Dict[str, Any],
-    inference_label_map: dict[str, Optional[str]],
-) -> Optional[str]:
-    final_category = complaint_row.get("final_category")
-    if final_category:
-        return normalize_text(final_category)
-
-    user_category = complaint_row.get("user_category")
-    mapped_user_category = map_citizen_category_to_internal(user_category)
-    if mapped_user_category:
-        return normalize_text(mapped_user_category)
-
-    complaint_id = str(complaint_row.get("id") or "")
-    inferred = inference_label_map.get(complaint_id)
-    if inferred:
-        return normalize_text(inferred)
-
-    return None
-
-
-def area_frequency_score(
-    complaint: Dict[str, Any],
-    target_category: Optional[str],
-) -> Dict[str, Any]:
-    area_field, area_value = get_primary_area_field_and_value(complaint)
-    if not area_field or not area_value or not target_category:
-        return {
-            "score": 0.0,
-            "matching_count": 0,
-            "repeat_count": 0,
-            "window_days": AREA_FREQUENCY_WINDOW_DAYS,
-            "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
-            "area_field": area_field,
-            "area_value": area_value,
-        }
-
-    cutoff = iso(utc_now() - timedelta(days=AREA_FREQUENCY_WINDOW_DAYS))
-    params = {
-        "select": "id,user_category,final_category,created_at",
-        area_field: f"eq.{area_value}",
-        "created_at": f"gte.{cutoff}",
-        "order": "created_at.desc",
-        "limit": "250",
-    }
-    r = rest_get("complaints", params=params)
-    if r.status_code != 200:
-        return {
-            "score": 0.0,
-            "matching_count": 0,
-            "repeat_count": 0,
-            "window_days": AREA_FREQUENCY_WINDOW_DAYS,
-            "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
-            "area_field": area_field,
-            "area_value": area_value,
-        }
-
-    rows = r.json() or []
-    related_ids = [str(row.get("id")) for row in rows if row.get("id")]
-    inference_label_map = fetch_inference_label_map(related_ids)
-
-    matching_count = 0
-    for row in rows:
-        existing_category = infer_existing_category(row, inference_label_map)
-        if existing_category == target_category:
-            matching_count += 1
-
-    current_id = str(complaint.get("id") or "")
-    current_present = any(str(row.get("id") or "") == current_id for row in rows)
-    repeat_count = max(0, matching_count - (1 if current_present else 0))
-    score = min(1.0, repeat_count / AREA_FREQUENCY_SATURATION_COUNT)
-
-    return {
-        "score": safe_float(score),
-        "matching_count": int(matching_count),
-        "repeat_count": int(repeat_count),
-        "window_days": AREA_FREQUENCY_WINDOW_DAYS,
-        "saturation_count": AREA_FREQUENCY_SATURATION_COUNT,
-        "area_field": area_field,
-        "area_value": area_value,
-    }
-
-
 def looks_like_low_quality_text(text: str) -> bool:
     clean = normalize_text(text)
     if not clean:
@@ -625,99 +584,30 @@ def looks_like_low_quality_text(text: str) -> bool:
     return False
 
 
-def build_quality_flags(
-    title: str,
-    description: str,
-    text_result: Dict[str, Any],
-    image_result: Dict[str, Any],
-    fusion_result: Dict[str, Any],
-    citizen_ai_conflict: bool,
-) -> list[str]:
-    flags: list[str] = []
+def project_text_distribution_to_shared_space(
+    full_text_distribution: Dict[str, float]
+) -> Dict[str, float]:
+    shared_scores = {label: 0.0 for label in SHARED_FUSION_LABELS}
 
-    combined_text = f"{title or ''} {description or ''}".strip()
+    for text_label, probability in full_text_distribution.items():
+        shared_label = TEXT18_TO_SHARED_LABEL.get(text_label)
+        if shared_label is None:
+            continue
+        shared_scores[shared_label] += float(probability)
 
-    if looks_like_low_quality_text(combined_text):
-        flags.append("low_quality_text")
-
-    text_conf = float(text_result.get("confidence") or 0.0)
-    if text_conf < LOW_TEXT_CONFIDENCE_THRESHOLD:
-        flags.append("low_text_confidence")
-
-    raw_image_labels = image_result.get("labels") or []
-    if not raw_image_labels:
-        flags.append("no_image_detection")
-
-    if raw_image_labels and not image_result.get("has_mapped_signal"):
-        flags.append("no_mapped_image_signal")
-
-    image_branch_conf = float(image_result.get("branch_confidence") or 0.0)
-    if image_result.get("has_mapped_signal") and image_branch_conf < LOW_IMAGE_CONFIDENCE_THRESHOLD:
-        flags.append("low_image_confidence")
-
-    if not image_result.get("has_mapped_signal"):
-        flags.append("text_only_fallback")
-
-    fusion_conf = float(fusion_result.get("fusion_confidence") or 0.0)
-    if fusion_conf < LOW_FUSION_CONFIDENCE_THRESHOLD:
-        flags.append("low_fusion_confidence")
-
-    if fusion_result.get("conflict_flag"):
-        flags.append("text_image_conflict")
-
-    if citizen_ai_conflict:
-        flags.append("citizen_ai_mismatch")
-
-    return flags
-
-
-def assess_ai_reliability(
-    title: str,
-    description: str,
-    text_result: Dict[str, Any],
-    image_result: Dict[str, Any],
-    fusion_result: Dict[str, Any],
-    citizen_ai_conflict: bool,
-) -> Dict[str, Any]:
-    quality_flags = build_quality_flags(
-        title=title,
-        description=description,
-        text_result=text_result,
-        image_result=image_result,
-        fusion_result=fusion_result,
-        citizen_ai_conflict=citizen_ai_conflict,
+    return normalize_score_dict(
+        shared_scores,
+        SHARED_FUSION_LABELS,
+        fallback_uniform=False,
     )
 
-    fusion_conf = float(fusion_result.get("fusion_confidence") or 0.0)
-    has_image_signal = bool(image_result.get("has_mapped_signal"))
-    text_conf = float(text_result.get("confidence") or 0.0)
-    image_conf = float(image_result.get("branch_confidence") or 0.0)
 
-    if "low_quality_text" in quality_flags and not has_image_signal:
-        reliability_status = "insufficient_evidence"
-    elif fusion_result.get("conflict_flag") or citizen_ai_conflict:
-        reliability_status = "conflict_detected"
-    elif fusion_conf < LOW_FUSION_CONFIDENCE_THRESHOLD:
-        reliability_status = "low_confidence"
-    elif text_conf < LOW_TEXT_CONFIDENCE_THRESHOLD and (not has_image_signal or image_conf < LOW_IMAGE_CONFIDENCE_THRESHOLD):
-        reliability_status = "low_confidence"
-    elif fusion_conf < NEEDS_REVIEW_FUSION_THRESHOLD or "low_text_confidence" in quality_flags or "low_image_confidence" in quality_flags:
-        reliability_status = "needs_review"
-    else:
-        reliability_status = "reliable"
-
-    manual_review_required = reliability_status in {
-        "insufficient_evidence",
-        "conflict_detected",
-        "low_confidence",
-        "needs_review",
-    }
-
-    return {
-        "reliability_status": reliability_status,
-        "manual_review_required": manual_review_required,
-        "quality_flags": quality_flags,
-    }
+def get_top_label_and_confidence(distribution: Dict[str, float]) -> tuple[Optional[str], float]:
+    if not distribution:
+        return None, 0.0
+    label = max(distribution, key=distribution.get)
+    confidence = float(distribution.get(label, 0.0))
+    return label, confidence
 
 
 def map_citizen_category_to_internal(user_category: Optional[str]) -> Optional[str]:
@@ -853,6 +743,10 @@ def run_text_inference(title: str, description: str) -> Dict[str, Any]:
             "label": "Uncategorized",
             "confidence": 0.0,
             "distribution": {},
+            "shared_distribution": {},
+            "shared_label": None,
+            "shared_confidence": 0.0,
+            "is_text_only_label": False,
         }
 
     max_len = int(meta.get("max_len", 256))
@@ -882,30 +776,32 @@ def run_text_inference(title: str, description: str) -> Dict[str, Any]:
         best_label = max(distribution, key=distribution.get) if distribution else "Uncategorized"
         best_confidence = float(distribution.get(best_label, 0.0))
 
+        shared_distribution = project_text_distribution_to_shared_space(distribution)
+        shared_label, shared_confidence = get_top_label_and_confidence(shared_distribution)
+
         return {
             "label": best_label,
             "confidence": safe_float(best_confidence),
             "distribution": distribution,
+            "shared_distribution": shared_distribution,
+            "shared_label": shared_label,
+            "shared_confidence": safe_float(shared_confidence),
+            "is_text_only_label": best_label in TEXT_ONLY_LABELS,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Text inference failed: {str(e)}")
 
 
 def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
-    _, _, meta = load_text_assets()
-    label_order = get_text_label_order(meta)
-
-    empty_distribution = normalize_score_dict({}, label_order, fallback_uniform=False)
+    empty_distribution = normalize_score_dict({}, SHARED_FUSION_LABELS, fallback_uniform=False)
     empty_result = {
         "labels": [],
         "confidences": [],
         "boxes": [],
         "detected_image_bytes": None,
-        "top_civic_label": None,
-        "top_civic_probability": 0.0,
-        "branch_confidence": 0.0,
-        "mapped_evidence_total": 0.0,
-        "has_mapped_signal": False,
+        "top_shared_label": None,
+        "top_shared_probability": 0.0,
+        "has_shared_signal": False,
         "distribution": empty_distribution,
     }
 
@@ -919,9 +815,8 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
         img_res.raise_for_status()
 
         image = Image.open(io.BytesIO(img_res.content)).convert("RGB")
-        image_np = np.array(image)
 
-        results = model.predict(source=image_np, verbose=False)
+        results = model.predict(source=image, verbose=False)
         if not results:
             return empty_result
 
@@ -930,8 +825,7 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
         confidences: list[float] = []
         boxes: list[list[float]] = []
 
-        civic_scores = {label: 0.0 for label in label_order}
-        mapped_detection_confidences: list[float] = []
+        shared_scores = {label: 0.0 for label in SHARED_FUSION_LABELS}
 
         if result.boxes is not None and len(result.boxes) > 0:
             for box in result.boxes:
@@ -944,10 +838,12 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
                 confidences.append(conf)
                 boxes.append([float(v) for v in xyxy])
 
-                mapped_label = IMAGE_TO_CIVIC_LABEL.get(raw_label)
-                if mapped_label:
-                    civic_scores[mapped_label] = civic_scores.get(mapped_label, 0.0) + conf
-                    mapped_detection_confidences.append(conf)
+                shared_label = IMAGE_TO_SHARED_LABEL.get(raw_label)
+                if shared_label:
+                    # Projection layer from detector labels to shared complaint labels.
+                    # Required because the trained image model has 10 detector classes
+                    # while multimodal fusion is performed in the shared complaint space.
+                    shared_scores[shared_label] += conf
 
             plotted = result.plot()
             plotted_rgb = plotted[:, :, ::-1]
@@ -956,23 +852,19 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
             annotated_image.save(buffer, format="JPEG", quality=92)
             detected_bytes = buffer.getvalue()
 
-            distribution = normalize_score_dict(civic_scores, label_order, fallback_uniform=False)
-            has_mapped_signal = any(value > 0.0 for value in civic_scores.values())
-            top_civic_label = max(distribution, key=distribution.get) if has_mapped_signal else None
-            top_civic_probability = float(distribution.get(top_civic_label, 0.0)) if top_civic_label else 0.0
-            branch_confidence = max(mapped_detection_confidences, default=0.0)
-            mapped_evidence_total = sum(mapped_detection_confidences)
+            distribution = normalize_score_dict(shared_scores, SHARED_FUSION_LABELS, fallback_uniform=False)
+            has_shared_signal = any(value > 0.0 for value in shared_scores.values())
+            top_shared_label = max(distribution, key=distribution.get) if has_shared_signal else None
+            top_shared_probability = float(distribution.get(top_shared_label, 0.0)) if top_shared_label else 0.0
 
             return {
                 "labels": labels,
                 "confidences": [safe_float(v) for v in confidences],
                 "boxes": boxes,
                 "detected_image_bytes": detected_bytes,
-                "top_civic_label": top_civic_label,
-                "top_civic_probability": safe_float(top_civic_probability),
-                "branch_confidence": safe_float(branch_confidence),
-                "mapped_evidence_total": safe_float(mapped_evidence_total),
-                "has_mapped_signal": has_mapped_signal,
+                "top_shared_label": top_shared_label,
+                "top_shared_probability": safe_float(top_shared_probability),
+                "has_shared_signal": has_shared_signal,
                 "distribution": distribution,
             }
 
@@ -981,170 +873,597 @@ def run_image_inference(public_url: Optional[str]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Image inference failed: {str(e)}")
 
 
-def fuse_results(text_result: Dict[str, Any], image_result: Dict[str, Any]) -> Dict[str, Any]:
-    text_dist = text_result.get("distribution") or {}
-    image_dist = image_result.get("distribution") or {}
-
-    label_order = sorted(set(text_dist.keys()) | set(image_dist.keys()))
+def weighted_late_fusion_exact(
+    text_distribution: dict[str, float],
+    image_distribution: dict[str, float],
+    text_weight: float,
+    image_weight: float,
+) -> Dict[str, Any]:
+    """
+    Exact weighted late fusion:
+        y_hat = (w_text * p_text + w_image * p_image) / (w_text + w_image)
+    """
+    label_order = sorted(set(text_distribution.keys()) | set(image_distribution.keys()))
     if not label_order:
         return {
             "fusion_label": "Uncategorized",
             "fusion_confidence": 0.0,
-            "conflict_flag": False,
             "distribution": {},
-            "weights": {"text": 1.0, "image": 0.0},
-            "branch_confidences": {"text": 0.0, "image": 0.0},
-            "conflict_thresholds": {
-                "text": CONFLICT_TEXT_THRESHOLD,
-                "image": CONFLICT_IMAGE_THRESHOLD,
+            "weights": {
+                "text": 0.0,
+                "image": 0.0,
             },
         }
 
-    text_available = bool(text_dist)
-    image_available = bool(image_result.get("has_mapped_signal"))
-    text_conf = float(text_result.get("confidence") or 0.0)
-    image_conf = float(image_result.get("branch_confidence") or 0.0)
-
-    if text_available and not image_available:
-        text_weight = 1.0
-        image_weight = 0.0
-    elif image_available and not text_available:
-        text_weight = 0.0
-        image_weight = 1.0
-    else:
-        text_reliability = FUSION_ALPHA_TEXT * text_conf
-        image_reliability = FUSION_ALPHA_IMAGE * image_conf
-        denom = text_reliability + image_reliability
-        if denom <= EPSILON:
-            text_weight = 0.5
-            image_weight = 0.5
-        else:
-            text_weight = text_reliability / denom
-            image_weight = image_reliability / denom
+    denom = float(text_weight) + float(image_weight)
+    if denom <= EPSILON:
+        raise HTTPException(
+            status_code=500,
+            detail="Fusion weight denominator must be positive."
+        )
 
     fused_distribution: dict[str, float] = {}
     for label in label_order:
-        t_score = float(text_dist.get(label, 0.0))
-        i_score = float(image_dist.get(label, 0.0))
-        fused_distribution[label] = (text_weight * t_score) + (image_weight * i_score)
+        p_text = float(text_distribution.get(label, 0.0))
+        p_image = float(image_distribution.get(label, 0.0))
+        fused_distribution[label] = (
+            (float(text_weight) * p_text) + (float(image_weight) * p_image)
+        ) / denom
 
-    fused_distribution = normalize_score_dict(fused_distribution, label_order, fallback_uniform=True)
+    fused_distribution = normalize_score_dict(
+        fused_distribution,
+        label_order,
+        fallback_uniform=False,
+    )
+
     fusion_label = max(fused_distribution, key=fused_distribution.get)
     fusion_confidence = float(fused_distribution[fusion_label])
-
-    text_label = text_result.get("label")
-    image_label = image_result.get("top_civic_label")
-
-    conflict_flag = bool(
-        image_available
-        and text_label
-        and image_label
-        and text_label != image_label
-        and text_conf >= CONFLICT_TEXT_THRESHOLD
-        and image_conf >= CONFLICT_IMAGE_THRESHOLD
-    )
 
     return {
         "fusion_label": fusion_label,
         "fusion_confidence": safe_float(fusion_confidence),
-        "conflict_flag": conflict_flag,
         "distribution": fused_distribution,
         "weights": {
-            "text": safe_float(text_weight),
-            "image": safe_float(image_weight),
+            "text": safe_float(float(text_weight)),
+            "image": safe_float(float(image_weight)),
         },
-        "branch_confidences": {
-            "text": safe_float(text_conf),
-            "image": safe_float(image_conf),
-        },
-        "conflict_thresholds": {
-            "text": CONFLICT_TEXT_THRESHOLD,
-            "image": CONFLICT_IMAGE_THRESHOLD,
-        },
-        "used_text_only": bool(text_available and not image_available),
-        "used_image_only": bool(image_available and not text_available),
     }
 
 
-def simple_summary(title: str, description: str, fusion_label: str, image_labels: list[str]) -> str:
+def resolve_final_prediction(
+    text_result: Dict[str, Any],
+    image_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    text_weight, image_weight = get_fusion_weights()
+
+    if text_result.get("is_text_only_label"):
+        return {
+            "final_label": text_result.get("label"),
+            "final_confidence": float(text_result.get("confidence") or 0.0),
+            "final_distribution": text_result.get("distribution") or {},
+            "weights": {"text": 1.0, "image": 0.0},
+            "decision_mode": "text_only_nonvisual_label",
+            "used_exact_multimodal_fusion": False,
+            "shared_fusion_result": None,
+        }
+
+    shared_text_distribution = text_result.get("shared_distribution") or {}
+    shared_image_distribution = image_result.get("distribution") or {}
+    image_has_signal = bool(image_result.get("has_shared_signal"))
+    text_has_shared_signal = bool(shared_text_distribution)
+
+    if text_has_shared_signal and image_has_signal:
+        shared_fusion_result = weighted_late_fusion_exact(
+            text_distribution=shared_text_distribution,
+            image_distribution=shared_image_distribution,
+            text_weight=text_weight,
+            image_weight=image_weight,
+        )
+        return {
+            "final_label": shared_fusion_result["fusion_label"],
+            "final_confidence": shared_fusion_result["fusion_confidence"],
+            "final_distribution": shared_fusion_result["distribution"],
+            "weights": shared_fusion_result["weights"],
+            "decision_mode": "exact_weighted_late_fusion_shared_8",
+            "used_exact_multimodal_fusion": True,
+            "shared_fusion_result": shared_fusion_result,
+        }
+
+    if text_has_shared_signal:
+        return {
+            "final_label": text_result.get("shared_label"),
+            "final_confidence": float(text_result.get("shared_confidence") or 0.0),
+            "final_distribution": shared_text_distribution,
+            "weights": {"text": 1.0, "image": 0.0},
+            "decision_mode": "text_only_shared_visual_label",
+            "used_exact_multimodal_fusion": False,
+            "shared_fusion_result": None,
+        }
+
+    return {
+        "final_label": text_result.get("label"),
+        "final_confidence": float(text_result.get("confidence") or 0.0),
+        "final_distribution": text_result.get("distribution") or {},
+        "weights": {"text": 1.0, "image": 0.0},
+        "decision_mode": "text_only_fallback",
+        "used_exact_multimodal_fusion": False,
+        "shared_fusion_result": None,
+    }
+
+
+def action_hint_for_category(final_label: str) -> str:
+    action_map = {
+        "Garbage and Unsanitary Practices": "Send the sanitation team to inspect and clear the waste.",
+        "Trees and Saplings": "Inspect the tree-related obstruction and remove any danger to the public.",
+        "Traffic and Road Safety": "Inspect the road safety issue and take immediate traffic-control action if needed.",
+        "Electricity and Power Supply": "Inspect the electrical hazard and secure the area if there is public risk.",
+        "Crime and Safety": "Review the safety concern and coordinate field verification.",
+        "Community Infrastructure and Services": "Inspect the damaged public structure and assess repair needs.",
+        "Mobility - Roads, Footpaths and Infrastructure": "Inspect the road or footpath issue and assess whether repair is needed.",
+        "Pollution": "Inspect the pollution source and take corrective action if confirmed.",
+    }
+    return action_map.get(final_label, "Inspect the site and verify the reported issue.")
+
+
+def shorten_text(text: str, max_chars: int = 180) -> str:
+    clean = normalize_text(text)
+    if not clean:
+        return ""
+    if len(clean) <= max_chars:
+        return clean
+    shortened = clean[:max_chars].rsplit(" ", 1)[0]
+    return f"{shortened}..."
+
+
+def simple_summary(title: str, description: str, final_label: str, image_labels: list[str], decision_mode: str) -> str:
     clean_title = normalize_text(title or "")
     clean_desc = normalize_text(description or "")
 
-    text_low_quality = looks_like_low_quality_text(f"{clean_title} {clean_desc}".strip())
+    main_text = clean_desc or clean_title
+    main_text = shorten_text(main_text, 180)
+
+    if not main_text:
+        main_text = "The complaint describes a public issue that should be verified on site."
 
     if image_labels:
-        image_part = f" Image detections: {', '.join(image_labels[:3])}."
+        unique_labels = list(dict.fromkeys(image_labels))
+        evidence_text = f"Visual evidence suggests: {', '.join(unique_labels[:2])}."
     else:
-        image_part = " No image detections available."
+        evidence_text = "No strong visual evidence was detected from the uploaded image."
 
-    if text_low_quality and image_labels:
-        return (
-            f"{fusion_label}: Complaint text is unclear or low-quality, so the result relies more on image evidence."
-            f"{image_part}"
-        ).strip()
+    action_text = action_hint_for_category(final_label)
 
-    if text_low_quality and not image_labels:
-        return (
-            f"{fusion_label}: Complaint text is unclear or low-quality and the image model found no usable detections."
-            f" Manual authority review is recommended."
-        ).strip()
+    return (
+        f"Reported issue: {main_text} "
+        f"Suggested category: {final_label}. "
+        f"{evidence_text} "
+        f"Recommended first step: {action_text}"
+    ).strip()
 
-    if clean_title:
-        return f"{fusion_label}: {clean_title}. {clean_desc}{image_part}".strip()
+def compute_sentiment_score(title: str, description: str) -> float:
+    """
+    Returns a per-complaint sentiment score in [-1, 1].
+    Uses VADER compound sentiment on complaint title + description.
+    """
+    text = normalize_text(f"{title}. {description}")
+    if not text:
+      return 0.0
 
-    if clean_desc:
-        return f"{fusion_label}: {clean_desc}{image_part}".strip()
+    scores = SENTIMENT_ANALYZER.polarity_scores(text)
+    compound = float(scores.get("compound", 0.0))
+    return safe_float(max(-1.0, min(1.0, compound)))
 
-    return f"{fusion_label}: Complaint submitted without sufficient text details.{image_part}".strip()
+
+def update_complaint_sentiment_score(complaint_id: str, sentiment_score: float):
+    payload = {
+        "sentiment_score": float(sentiment_score),
+        "sentiment_scored_at": iso(utc_now()),
+    }
+    params = {"id": f"eq.{complaint_id}"}
+
+    r = rest_patch("complaints", payload, params=params)
+    if r.status_code not in (200, 204):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update complaint sentiment score: {r.status_code} {r.text}"
+        )
+    
+def urgency_from_sentiment_exact(sentiment_score: float) -> float:
+    """
+    Exact Rajkumar formula:
+        p_i = (s_i + 1) / 2
+    where s_i in [-1, 1].
+    """
+    s_i = float(sentiment_score)
+    if s_i < -1.0 or s_i > 1.0:
+        raise HTTPException(
+            status_code=500,
+            detail="Sentiment score must be in [-1, 1]."
+        )
+    return safe_float((s_i + 1.0) / 2.0)
 
 
-def calculate_priority(
-    complaint: Dict[str, Any],
-    fusion_label: Optional[str],
-    fusion_conf: Optional[float],
-    conflict_flag: bool,
-):
-    severity_info = get_scaled_severity(fusion_label)
-    severity_component = float(severity_info["scaled"])
-    severity_raw = float(severity_info["raw"])
+def calculate_elapsed_hours(created_at_iso: str) -> float:
+    created_dt = datetime.fromisoformat(str(created_at_iso).replace("Z", "+00:00"))
+    return safe_float((utc_now() - created_dt).total_seconds() / 3600.0)
 
-    area_info = area_frequency_score(
-        complaint=complaint,
-        target_category=fusion_label,
+
+def should_escalate_exact(
+    created_at_iso: str,
+    current_status: str,
+    escalation_threshold_hours: float,
+) -> dict[str, Any]:
+    """
+    Exact Rajkumar escalation condition:
+        t_c - t_s > T and status != Resolved
+    """
+    if not created_at_iso:
+        raise HTTPException(status_code=500, detail="created_at is required.")
+
+    elapsed_hours = calculate_elapsed_hours(created_at_iso)
+    status_clean = normalize_text(current_status or "").lower()
+
+    escalated = bool(
+        elapsed_hours > float(escalation_threshold_hours)
+        and status_clean != "resolved"
     )
-    frequency_component = float(area_info.get("score") or 0.0)
-    recency_component = recency_score(complaint.get("created_at"))
-    confidence_component = float(fusion_conf or 0.0)
-    conflict_component = 1.0 if conflict_flag else 0.0
 
-    priority_norm = (
-        PRIORITY_WEIGHT_SEVERITY * severity_component
-        + PRIORITY_WEIGHT_FREQUENCY * frequency_component
-        + PRIORITY_WEIGHT_RECENCY * recency_component
-        + PRIORITY_WEIGHT_CONFIDENCE * confidence_component
-        - PRIORITY_WEIGHT_CONFLICT * conflict_component
-    )
-
-    priority_norm = max(0.0, min(1.0, priority_norm))
-    priority_score = round(priority_norm * 100.0, 2)
-
-    if priority_score >= 75:
-        priority = "high"
-    elif priority_score >= 45:
-        priority = "medium"
-    else:
-        priority = "low"
-
-    components = {
-        "severity": round(severity_component, 4),
-        "severity_raw": round(severity_raw, 4),
-        "fusion_confidence": round(confidence_component, 4),
-        "area_frequency": round(frequency_component, 4),
-        "recency": round(recency_component, 4),
-        "conflict_penalty": round(conflict_component, 4),
+    return {
+        "elapsed_hours": safe_float(elapsed_hours),
+        "threshold_hours": safe_float(escalation_threshold_hours),
+        "should_escalate": escalated,
     }
 
-    return priority_score, priority, components, area_info
+
+def normalize_saw_column_exact(values: list[float], criterion_type: CriterionType) -> list[float]:
+    if not values:
+        return []
+
+    if criterion_type == "benefit":
+        max_value = max(values)
+        if max_value <= 0:
+            return [0.0 for _ in values]
+        return [safe_float(v / max_value) for v in values]
+
+    if criterion_type == "cost":
+        positive_values = [v for v in values if v > 0]
+        if not positive_values:
+            return [0.0 for _ in values]
+        min_value = min(positive_values)
+        return [safe_float(min_value / v) if v > 0 else 0.0 for v in values]
+
+    raise HTTPException(status_code=500, detail=f"Unsupported criterion type: {criterion_type}")
+
+
+def compute_saw_scores_exact(
+    alternatives: list[dict[str, Any]],
+    criteria: list[SawCriterion],
+) -> list[dict[str, Any]]:
+    """
+    Exact SAW implementation:
+      benefit: r_ij = x_ij / max_i x_ij
+      cost:    r_ij = min_i x_ij / x_ij
+      score:   V_i  = sum_j w_j * r_ij
+    """
+    if not alternatives:
+        return []
+
+    result_rows = [
+        {
+            "id": alt["id"],
+            "raw": {},
+            "normalized": {},
+            "score": 0.0,
+        }
+        for alt in alternatives
+    ]
+
+    for criterion in criteria:
+        field = criterion["field"]
+        ctype = criterion["type"]
+        weight = float(criterion["weight"])
+
+        column_values: list[float] = []
+        for alt in alternatives:
+            raw_value = alt.get(field)
+            if raw_value is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Missing SAW field '{field}' for complaint {alt.get('id')}"
+                )
+            column_values.append(float(raw_value))
+
+        normalized_values = normalize_saw_column_exact(column_values, ctype)
+
+        for idx, _ in enumerate(alternatives):
+            result_rows[idx]["raw"][field] = safe_float(column_values[idx])
+            result_rows[idx]["normalized"][field] = safe_float(normalized_values[idx])
+            result_rows[idx]["score"] += weight * normalized_values[idx]
+
+    for row in result_rows:
+        row["score"] = safe_float(row["score"])
+
+    result_rows.sort(key=lambda x: x["score"], reverse=True)
+
+    for rank, row in enumerate(result_rows, start=1):
+        row["rank"] = rank
+
+    return result_rows
+
+
+def get_open_complaint_rows(limit: int = 500) -> list[Dict[str, Any]]:
+    params = {
+        "select": "*",
+        "order": "created_at.asc",
+        "limit": str(limit),
+    }
+    r = rest_get("complaints", params=params)
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load complaint pool: {r.status_code} {r.text}"
+        )
+
+    rows = r.json() or []
+    open_rows = []
+    for row in rows:
+        status_clean = normalize_text(row.get("status") or "").lower()
+        if status_clean != "resolved":
+            open_rows.append(row)
+    return open_rows
+
+
+def calculate_priority_exact(
+    current_complaint: Dict[str, Any],
+    current_fusion_confidence: float,
+) -> Dict[str, Any]:
+    """
+    Exact-priority path:
+    1) urgency from sentiment: p_i = (s_i + 1) / 2
+    2) SAW normalization and ranking over the active complaint pool
+    3) exact escalation condition based on elapsed time and unresolved status
+    """
+    try:
+        criteria = get_saw_criteria()
+        escalation_threshold_hours = get_escalation_threshold_hours()
+    except HTTPException as e:
+        return {
+            "status": "not_computed",
+            "reason": str(e.detail),
+            "score": None,
+            "rank": None,
+            "urgency_score": None,
+            "normalized": {},
+            "raw": {},
+            "escalation": None,
+            "escalation_status": None,
+            "escalation_reason": None,
+        }
+
+    current_sentiment = current_complaint.get("sentiment_score")
+    if current_sentiment is None:
+        return {
+            "status": "not_computed",
+            "reason": "sentiment_score is required on complaints for the exact urgency formula.",
+            "score": None,
+            "rank": None,
+            "urgency_score": None,
+            "normalized": {},
+            "raw": {},
+            "escalation": None,
+            "escalation_status": None,
+            "escalation_reason": None,
+        }
+
+    try:
+        current_urgency = urgency_from_sentiment_exact(float(current_sentiment))
+    except Exception:
+        return {
+            "status": "not_computed",
+            "reason": "Current complaint sentiment_score is invalid.",
+            "score": None,
+            "rank": None,
+            "urgency_score": None,
+            "normalized": {},
+            "raw": {},
+            "escalation": None,
+            "escalation_status": None,
+            "escalation_reason": None,
+        }
+
+    current_id = str(current_complaint.get("id") or "")
+    pool = get_open_complaint_rows(limit=500)
+    complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
+    inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
+
+    alternatives: list[dict[str, Any]] = []
+    required_fields = {criterion["field"] for criterion in criteria}
+
+    for row in pool:
+        complaint_id = str(row.get("id") or "")
+        sentiment_score = row.get("sentiment_score")
+        if sentiment_score is None:
+            continue
+
+        try:
+            urgency_score = urgency_from_sentiment_exact(float(sentiment_score))
+            elapsed_hours = calculate_elapsed_hours(str(row.get("created_at")))
+        except Exception:
+            continue
+
+        if complaint_id == current_id:
+            fusion_confidence = float(current_fusion_confidence)
+        else:
+            existing_inf = inference_map.get(complaint_id) or {}
+            fusion_conf_raw = existing_inf.get("fusion_confidence")
+            if fusion_conf_raw is None:
+                continue
+            fusion_confidence = float(fusion_conf_raw)
+
+        alternative = {
+            "id": complaint_id,
+            "urgency_score": urgency_score,
+            "fusion_confidence": safe_float(fusion_confidence),
+            "elapsed_hours": elapsed_hours,
+        }
+
+        if any(alternative.get(field) is None for field in required_fields):
+            continue
+
+        alternatives.append(alternative)
+
+    if not alternatives:
+        return {
+            "status": "not_computed",
+            "reason": "No valid complaint pool available for exact SAW ranking.",
+            "score": None,
+            "rank": None,
+            "urgency_score": current_urgency,
+            "normalized": {},
+            "raw": {},
+            "escalation": None,
+            "escalation_status": None,
+            "escalation_reason": None,
+        }
+
+    if current_id not in {alt["id"] for alt in alternatives}:
+        try:
+            current_elapsed = calculate_elapsed_hours(str(current_complaint.get("created_at")))
+        except Exception:
+            current_elapsed = None
+
+        current_alternative = {
+            "id": current_id,
+            "urgency_score": current_urgency,
+            "fusion_confidence": safe_float(current_fusion_confidence),
+            "elapsed_hours": current_elapsed,
+        }
+
+        if all(current_alternative.get(field) is not None for field in required_fields):
+            alternatives.append(current_alternative)
+
+    scored_rows = compute_saw_scores_exact(alternatives, criteria)
+    current_row = next((row for row in scored_rows if row["id"] == current_id), None)
+
+    if current_row is None:
+        return {
+            "status": "not_computed",
+            "reason": "Current complaint could not be ranked in the exact SAW pool.",
+            "score": None,
+            "rank": None,
+            "urgency_score": current_urgency,
+            "normalized": {},
+            "raw": {},
+            "escalation": None,
+            "escalation_status": None,
+            "escalation_reason": None,
+        }
+
+    escalation = should_escalate_exact(
+        created_at_iso=str(current_complaint.get("created_at")),
+        current_status=str(current_complaint.get("status") or ""),
+        escalation_threshold_hours=escalation_threshold_hours,
+    )
+
+    escalation_status = (
+        "escalate_now"
+        if escalation.get("should_escalate")
+        else "within_threshold"
+    )
+
+    escalation_reason = (
+        f"Elapsed hours: {escalation.get('elapsed_hours')} | "
+        f"Threshold: {escalation.get('threshold_hours')} | "
+        f"Status: {current_complaint.get('status') or 'unknown'}"
+    )
+
+    return {
+        "status": "computed",
+        "reason": None,
+        "score": safe_float(current_row["score"]),
+        "rank": int(current_row["rank"]),
+        "urgency_score": safe_float(current_urgency),
+        "normalized": current_row["normalized"],
+        "raw": current_row["raw"],
+        "escalation": escalation,
+        "escalation_status": escalation_status,
+        "escalation_reason": escalation_reason,
+    }
+
+def build_quality_flags(
+    text_result: Dict[str, Any],
+    image_result: Dict[str, Any],
+    decision_result: Dict[str, Any],
+    priority_result: Dict[str, Any],
+    citizen_ai_conflict: bool,
+) -> list[str]:
+    flags: list[str] = []
+
+    if text_result.get("is_text_only_label"):
+        flags.append("text_only_category")
+
+    if not image_result.get("labels"):
+        flags.append("no_image_detection")
+
+    if not image_result.get("has_shared_signal"):
+        flags.append("no_shared_image_signal")
+
+    if decision_result.get("used_exact_multimodal_fusion"):
+        flags.append("exact_shared_fusion_applied")
+    else:
+        flags.append("exact_shared_fusion_not_applied")
+
+    if priority_result.get("status") != "computed":
+        flags.append("exact_priority_not_computed")
+
+    if citizen_ai_conflict:
+        flags.append("citizen_ai_mismatch")
+
+    return flags
+
+
+def assess_ai_reliability(
+    text_result: Dict[str, Any],
+    image_result: Dict[str, Any],
+    decision_result: Dict[str, Any],
+    priority_result: Dict[str, Any],
+    citizen_ai_conflict: bool,
+) -> Dict[str, Any]:
+    quality_flags = build_quality_flags(
+        text_result=text_result,
+        image_result=image_result,
+        decision_result=decision_result,
+        priority_result=priority_result,
+        citizen_ai_conflict=citizen_ai_conflict,
+    )
+
+    has_exact_fusion = bool(decision_result.get("used_exact_multimodal_fusion"))
+    is_text_only_label = bool(text_result.get("is_text_only_label"))
+    has_shared_image_signal = bool(image_result.get("has_shared_signal"))
+    has_text_label = bool(text_result.get("label"))
+
+    if not has_text_label and not has_shared_image_signal:
+        reliability_status = "insufficient_evidence"
+        manual_review_required = True
+    elif citizen_ai_conflict:
+        reliability_status = "manual_review_needed"
+        manual_review_required = True
+    elif has_exact_fusion:
+        reliability_status = "reliable"
+        manual_review_required = False
+    elif is_text_only_label:
+        reliability_status = "reliable"
+        manual_review_required = False
+    else:
+        reliability_status = "manual_review_needed"
+        manual_review_required = True
+
+    return {
+        "reliability_status": reliability_status,
+        "manual_review_required": manual_review_required,
+        "quality_flags": quality_flags,
+    }
+    
 
 
 # ---------- models ----------
@@ -1263,6 +1582,14 @@ def run_ai_for_complaint(complaint_id: str):
     complaint = get_complaint_row(complaint_id)
     media = get_complaint_image_row(complaint_id)
 
+    sentiment_score = compute_sentiment_score(
+        title=complaint.get("title") or "",
+        description=complaint.get("description") or "",
+    )
+    update_complaint_sentiment_score(complaint_id, sentiment_score)
+
+    complaint["sentiment_score"] = sentiment_score
+
     citizen_category_raw = complaint.get("user_category")
     citizen_category_internal = map_citizen_category_to_internal(citizen_category_raw)
 
@@ -1275,20 +1602,14 @@ def run_ai_for_complaint(complaint_id: str):
         public_url=media.get("public_url") if media else None
     )
 
-    fusion_result = fuse_results(text_result, image_result)
+    decision_result = resolve_final_prediction(text_result, image_result)
 
     summary = simple_summary(
         title=complaint.get("title") or "",
         description=complaint.get("description") or "",
-        fusion_label=fusion_result["fusion_label"],
+        final_label=decision_result["final_label"],
         image_labels=image_result.get("labels") or [],
-    )
-
-    priority_score, priority, priority_components, area_info = calculate_priority(
-        complaint=complaint,
-        fusion_label=fusion_result["fusion_label"],
-        fusion_conf=fusion_result.get("fusion_confidence"),
-        conflict_flag=fusion_result["conflict_flag"],
+        decision_mode=decision_result["decision_mode"],
     )
 
     detected_image_path = None
@@ -1303,47 +1624,53 @@ def run_ai_for_complaint(complaint_id: str):
 
     citizen_ai_conflict = bool(
         citizen_category_internal
-        and fusion_result.get("fusion_label")
-        and citizen_category_internal != fusion_result.get("fusion_label")
+        and decision_result.get("final_label")
+        and citizen_category_internal != decision_result.get("final_label")
+    )
+
+    priority_result = calculate_priority_exact(
+        current_complaint=complaint,
+        current_fusion_confidence=float(decision_result.get("final_confidence") or 0.0),
     )
 
     reliability = assess_ai_reliability(
-        title=complaint.get("title") or "",
-        description=complaint.get("description") or "",
         text_result=text_result,
         image_result=image_result,
-        fusion_result=fusion_result,
+        decision_result=decision_result,
+        priority_result=priority_result,
         citizen_ai_conflict=citizen_ai_conflict,
     )
 
     model_versions_payload = serialize_model_versions({
         "text_model": "roberta-base-local-finetuned",
         "image_model": "yolo-best-pt-local",
-        "fusion_strategy": "adaptive-reliability-late-fusion-v3",
-        "priority_strategy": "severity-confidence-frequency-recency-conflict-v3",
+        "shared_fusion_space_size": len(SHARED_FUSION_LABELS),
+        "shared_fusion_labels": SHARED_FUSION_LABELS,
+        "fusion_strategy": "exact_weighted_late_fusion_shared_8",
+        "priority_strategy": "exact_urgency_plus_saw_ranking",
+        "decision_mode": decision_result.get("decision_mode"),
+        "used_exact_multimodal_fusion": decision_result.get("used_exact_multimodal_fusion"),
         "reliability_status": reliability["reliability_status"],
         "manual_review_required": reliability["manual_review_required"],
         "quality_flags": ", ".join(reliability["quality_flags"]) if reliability["quality_flags"] else "none",
         "citizen_ai_conflict": citizen_ai_conflict,
-        "text_branch_confidence": text_result.get("confidence") or 0.0,
-        "image_branch_confidence": image_result.get("branch_confidence") or 0.0,
-        "image_top_civic_probability": image_result.get("top_civic_probability") or 0.0,
-        "image_mapped_evidence_total": image_result.get("mapped_evidence_total") or 0.0,
-        "text_weight": fusion_result.get("weights", {}).get("text", 1.0),
-        "image_weight": fusion_result.get("weights", {}).get("image", 0.0),
-        "used_text_only": fusion_result.get("used_text_only", False),
-        "used_image_only": fusion_result.get("used_image_only", False),
-        "conflict_threshold_text": CONFLICT_TEXT_THRESHOLD,
-        "conflict_threshold_image": CONFLICT_IMAGE_THRESHOLD,
-        "area_frequency_score": area_info.get("score", 0.0),
-        "area_frequency_repeat_count": area_info.get("repeat_count", 0),
-        "area_frequency_matching_count": area_info.get("matching_count", 0),
-        "area_frequency_window_days": area_info.get("window_days", AREA_FREQUENCY_WINDOW_DAYS),
-        "area_frequency_area_field": area_info.get("area_field") or "",
-        "area_frequency_area_value": area_info.get("area_value") or "",
-        "severity_score": priority_components.get("severity", 0.0),
-        "recency_score": priority_components.get("recency", 0.0),
-        "priority_components": priority_components,
+        "text_label_full_18": text_result.get("label"),
+        "text_confidence_full_18": text_result.get("confidence") or 0.0,
+        "text_shared_label": text_result.get("shared_label") or "",
+        "text_shared_confidence": text_result.get("shared_confidence") or 0.0,
+        "image_top_shared_label": image_result.get("top_shared_label") or "",
+        "image_top_shared_probability": image_result.get("top_shared_probability") or 0.0,
+        "text_weight": decision_result.get("weights", {}).get("text", 1.0),
+        "image_weight": decision_result.get("weights", {}).get("image", 0.0),
+        "priority_status": priority_result.get("status"),
+        "priority_rank": priority_result.get("rank"),
+        "priority_reason": priority_result.get("reason"),
+        "priority_normalized": priority_result.get("normalized"),
+        "priority_raw": priority_result.get("raw"),
+        "urgency_score": priority_result.get("urgency_score"),
+        "escalation": priority_result.get("escalation"),
+        "escalation_status": priority_result.get("escalation_status"),
+        "escalation_reason": priority_result.get("escalation_reason"),
     })
 
     save_payload = {
@@ -1352,11 +1679,11 @@ def run_ai_for_complaint(complaint_id: str):
         "image_labels": image_result.get("labels"),
         "image_confidences": image_result.get("confidences"),
         "image_boxes": image_result.get("boxes"),
-        "fusion_label": fusion_result.get("fusion_label"),
-        "fusion_confidence": fusion_result.get("fusion_confidence"),
-        "conflict_flag": fusion_result.get("conflict_flag"),
-        "priority_score": priority_score,
-        "priority": priority,
+        "fusion_label": decision_result.get("final_label"),
+        "fusion_confidence": decision_result.get("final_confidence"),
+        "conflict_flag": False,
+        "priority_score": priority_result.get("score"),
+        "priority": None,
         "summary": summary,
         "detected_image_url": detected_image_url,
         "detected_image_path": detected_image_path,
@@ -1368,7 +1695,7 @@ def run_ai_for_complaint(complaint_id: str):
 
     update_complaint_category_if_empty(
         complaint_id=complaint_id,
-        final_category=fusion_result.get("fusion_label"),
+        final_category=decision_result.get("final_label"),
         category_source="ai",
     )
 
@@ -1378,24 +1705,25 @@ def run_ai_for_complaint(complaint_id: str):
         "citizen_category": citizen_category_raw,
         "citizen_category_internal": citizen_category_internal,
         "citizen_ai_conflict": citizen_ai_conflict,
-        "text_result": text_result,
+        "text_result": {
+            "label_full_18": text_result.get("label"),
+            "confidence_full_18": text_result.get("confidence"),
+            "shared_label": text_result.get("shared_label"),
+            "shared_confidence": text_result.get("shared_confidence"),
+            "is_text_only_label": text_result.get("is_text_only_label"),
+        },
         "image_result": {
             "labels": image_result.get("labels"),
             "confidences": image_result.get("confidences"),
             "boxes": image_result.get("boxes"),
-            "top_civic_label": image_result.get("top_civic_label"),
-            "top_civic_probability": image_result.get("top_civic_probability"),
-            "branch_confidence": image_result.get("branch_confidence"),
-            "mapped_evidence_total": image_result.get("mapped_evidence_total"),
-            "has_mapped_signal": image_result.get("has_mapped_signal"),
+            "top_shared_label": image_result.get("top_shared_label"),
+            "top_shared_probability": image_result.get("top_shared_probability"),
+            "has_shared_signal": image_result.get("has_shared_signal"),
             "detected_image_url": detected_image_url,
         },
-        "fusion_result": fusion_result,
-        "priority_score": priority_score,
-        "priority": priority,
+        "decision_result": decision_result,
+        "priority_result": priority_result,
         "summary": summary,
-        "priority_components": priority_components,
-        "area_frequency": area_info,
         "reliability_status": reliability["reliability_status"],
         "manual_review_required": reliability["manual_review_required"],
         "quality_flags": reliability["quality_flags"],
