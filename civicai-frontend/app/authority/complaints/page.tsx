@@ -1,3 +1,4 @@
+
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
@@ -18,6 +19,8 @@ type ComplaintRow = {
   created_at: string;
   user_category: string | null;
   final_category: string | null;
+  duplicate_of: string | null;
+  cluster_id: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -110,13 +113,6 @@ function nicePercent(value?: number | null) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function confidenceLabel(value?: number | null) {
-  if (value == null) return "Not available";
-  if (value >= 0.85) return `High (${nicePercent(value)})`;
-  if (value >= 0.6) return `Moderate (${nicePercent(value)})`;
-  return `Low (${nicePercent(value)})`;
-}
-
 function ordinal(value?: number | null) {
   if (value == null) return "N/A";
   const v = Math.abs(value);
@@ -128,40 +124,13 @@ function ordinal(value?: number | null) {
   return `${value}th`;
 }
 
-function friendlyEscalation(value?: string | null) {
-  switch (value) {
-    case "escalate_now":
-      return "Needs escalation now";
-    case "within_threshold":
-      return "Within response window";
-    default:
-      return "Not available";
-  }
-}
-
-function shortenText(text?: string | null, max = 140) {
-  if (!text) return "";
-  const clean = text.trim().replace(/\s+/g, " ");
-  if (clean.length <= max) return clean;
-
-  const sliced = clean.slice(0, max);
-  const lastSpace = sliced.lastIndexOf(" ");
-  const shortened = lastSpace > 0 ? sliced.slice(0, lastSpace) : sliced;
-
-  return `${shortened}...`;
-}
-
 function matchesStatusFilter(filterValue: string, statusValue: string) {
   if (filterValue === "all") return true;
   if (filterValue === "open") {
     return statusValue === "submitted" || statusValue === "processing";
   }
   if (filterValue === "resolved_all") {
-    return (
-      statusValue === "resolved" ||
-      statusValue === "completed" ||
-      statusValue === "rejected"
-    );
+    return statusValue === "resolved" || statusValue === "completed" || statusValue === "rejected";
   }
   return statusValue === filterValue;
 }
@@ -187,6 +156,21 @@ function statusFilterLabel(filterValue: string) {
   }
 }
 
+function reviewFilterLabel(filterValue: string) {
+  switch (filterValue) {
+    case "manual_review":
+      return "Manual review";
+    case "conflict":
+      return "Conflict cases";
+    case "high_priority":
+      return "Top queue / urgent";
+    case "reliable":
+      return "Reliable AI result";
+    default:
+      return filterValue;
+  }
+}
+
 export default async function AuthorityComplaintsPage({
   searchParams,
 }: {
@@ -198,6 +182,11 @@ export default async function AuthorityComplaintsPage({
     area?: string;
     source?: string;
     page?: string;
+    duplicate?: string;
+    duplicateOf?: string;
+    cluster?: string;
+    clusterId?: string;
+    pattern?: string;
   }>;
 }) {
   const params = (await searchParams) ?? {};
@@ -207,6 +196,11 @@ export default async function AuthorityComplaintsPage({
   const selectedCategory = (params.category ?? "").trim();
   const selectedArea = (params.area ?? "").trim();
   const sourceContext = (params.source ?? "").trim();
+  const selectedDuplicate = (params.duplicate ?? "").trim();
+  const selectedDuplicateOf = (params.duplicateOf ?? "").trim();
+  const selectedCluster = (params.cluster ?? "").trim();
+  const selectedClusterId = (params.clusterId ?? "").trim();
+  const selectedPattern = (params.pattern ?? "").trim();
   const currentPage = Math.max(Number(params.page ?? "1") || 1, 1);
   const pageSize = 12;
 
@@ -218,6 +212,11 @@ export default async function AuthorityComplaintsPage({
     area: selectedArea,
     source: sourceContext,
     page: currentPage,
+    duplicate: selectedDuplicate,
+    duplicateOf: selectedDuplicateOf,
+    cluster: selectedCluster,
+    clusterId: selectedClusterId,
+    pattern: selectedPattern,
   });
 
   const cookieStore = await cookies();
@@ -230,8 +229,8 @@ export default async function AuthorityComplaintsPage({
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() { },
-        remove() { },
+        set() {},
+        remove() {},
       },
     }
   );
@@ -272,7 +271,9 @@ export default async function AuthorityComplaintsPage({
       status,
       created_at,
       user_category,
-      final_category
+      final_category,
+      duplicate_of,
+      cluster_id
     `)
     .order("created_at", { ascending: false });
 
@@ -326,6 +327,28 @@ export default async function AuthorityComplaintsPage({
     }
   }
 
+  const clusterCounts = new Map<string, number>();
+  const repeatedPatternCounts = new Map<string, number>();
+
+  for (const complaint of complaints) {
+    if (complaint.cluster_id) {
+      clusterCounts.set(
+        complaint.cluster_id,
+        (clusterCounts.get(complaint.cluster_id) ?? 0) + 1
+      );
+    }
+
+    const ai = inferenceByComplaint.get(complaint.id);
+    const derivedCategory =
+      complaint.final_category ||
+      ai?.fusion_label ||
+      complaint.user_category ||
+      "Uncategorized";
+    const derivedArea = getAreaName(complaint);
+    const pairKey = `${derivedArea}__${derivedCategory}`;
+    repeatedPatternCounts.set(pairKey, (repeatedPatternCounts.get(pairKey) ?? 0) + 1);
+  }
+
   const filteredComplaints = complaints.filter((complaint) => {
     const ai = inferenceByComplaint.get(complaint.id);
     const reliability = ai?.model_versions?.reliability_status ?? null;
@@ -344,10 +367,10 @@ export default async function AuthorityComplaintsPage({
       "Uncategorized";
 
     const derivedArea = getAreaName(complaint);
-
     const searchLower = queryText.toLowerCase();
     const categoryLower = selectedCategory.toLowerCase();
     const areaLower = selectedArea.toLowerCase();
+    const pairKey = `${derivedArea}__${derivedCategory}`;
 
     const matchesSearch =
       !queryText ||
@@ -373,12 +396,40 @@ export default async function AuthorityComplaintsPage({
     const matchesArea =
       !selectedArea || derivedArea.toLowerCase().includes(areaLower);
 
+    const matchesDuplicate =
+      !selectedDuplicate ||
+      (selectedDuplicate === "linked" && Boolean(complaint.duplicate_of));
+
+    const matchesDuplicateOf =
+      !selectedDuplicateOf ||
+      complaint.duplicate_of === selectedDuplicateOf ||
+      complaint.id === selectedDuplicateOf;
+
+    const matchesCluster =
+      !selectedCluster ||
+      (selectedCluster === "repeated" &&
+        Boolean(complaint.cluster_id) &&
+        (clusterCounts.get(complaint.cluster_id ?? "") ?? 0) > 1);
+
+    const matchesClusterId =
+      !selectedClusterId || complaint.cluster_id === selectedClusterId;
+
+    const matchesPattern =
+      !selectedPattern ||
+      (selectedPattern === "repeated" &&
+        (repeatedPatternCounts.get(pairKey) ?? 0) > 1);
+
     return (
       matchesSearch &&
       matchesStatus &&
       matchesReview &&
       matchesCategory &&
-      matchesArea
+      matchesArea &&
+      matchesDuplicate &&
+      matchesDuplicateOf &&
+      matchesCluster &&
+      matchesClusterId &&
+      matchesPattern
     );
   });
 
@@ -403,6 +454,14 @@ export default async function AuthorityComplaintsPage({
   const rejectedCount = filteredComplaints.filter(
     (item) => item.status === "rejected"
   ).length;
+  const duplicateLinkedCount = filteredComplaints.filter(
+    (item) => Boolean(item.duplicate_of)
+  ).length;
+  const repeatedClusterCount = filteredComplaints.filter(
+    (item) =>
+      Boolean(item.cluster_id) &&
+      (clusterCounts.get(item.cluster_id ?? "") ?? 0) > 1
+  ).length;
 
   const prevPage = safePage > 1 ? safePage - 1 : null;
   const nextPage = safePage < totalPages ? safePage + 1 : null;
@@ -412,7 +471,12 @@ export default async function AuthorityComplaintsPage({
     selectedStatus !== "all" ||
     selectedReview !== "all" ||
     Boolean(selectedCategory) ||
-    Boolean(selectedArea);
+    Boolean(selectedArea) ||
+    Boolean(selectedDuplicate) ||
+    Boolean(selectedDuplicateOf) ||
+    Boolean(selectedCluster) ||
+    Boolean(selectedClusterId) ||
+    Boolean(selectedPattern);
 
   function buildPageHref(page: number) {
     const search = new URLSearchParams();
@@ -422,9 +486,19 @@ export default async function AuthorityComplaintsPage({
     if (selectedCategory) search.set("category", selectedCategory);
     if (selectedArea) search.set("area", selectedArea);
     if (sourceContext) search.set("source", sourceContext);
+    if (selectedDuplicate) search.set("duplicate", selectedDuplicate);
+    if (selectedDuplicateOf) search.set("duplicateOf", selectedDuplicateOf);
+    if (selectedCluster) search.set("cluster", selectedCluster);
+    if (selectedClusterId) search.set("clusterId", selectedClusterId);
+    if (selectedPattern) search.set("pattern", selectedPattern);
     search.set("page", String(page));
     return `/authority/complaints?${search.toString()}`;
   }
+
+  const heroSubtitle =
+    sourceContext === "analytics"
+      ? "A filtered operational queue opened from analytics, so authorities can move directly from pattern discovery into complaint review."
+      : "A structured complaint management page for reviewing new, unresolved, duplicate-linked, clustered, and flagged complaints without overloading the dashboard.";
 
   return (
     <main className={styles.page}>
@@ -462,11 +536,7 @@ export default async function AuthorityComplaintsPage({
             <section className={styles.hero}>
               <p className={styles.eyebrow}>Authority complaint management</p>
               <h1 className={styles.title}>All complaints work queue</h1>
-              <p className={styles.subtitle}>
-                {sourceContext === "analytics"
-                  ? "A filtered operational queue opened from analytics, so authorities can move directly from pattern discovery into complaint review."
-                  : "A structured complaint management page for reviewing new, unresolved, and flagged complaints without overloading the dashboard."}
-              </p>
+              <p className={styles.subtitle}>{heroSubtitle}</p>
 
               <div className={styles.statStrip}>
                 <div className={styles.statMiniCard}>
@@ -492,6 +562,18 @@ export default async function AuthorityComplaintsPage({
                   <h3 className={styles.statMiniValue}>{resolvedCount + rejectedCount}</h3>
                   <p className={styles.statMiniText}>Handled complaints in this filtered view.</p>
                 </div>
+
+                <div className={styles.statMiniCard}>
+                  <p className={styles.statMiniLabel}>Duplicate linked</p>
+                  <h3 className={styles.statMiniValue}>{duplicateLinkedCount}</h3>
+                  <p className={styles.statMiniText}>Complaints already linked to another complaint.</p>
+                </div>
+
+                <div className={styles.statMiniCard}>
+                  <p className={styles.statMiniLabel}>Repeated clusters</p>
+                  <h3 className={styles.statMiniValue}>{repeatedClusterCount}</h3>
+                  <p className={styles.statMiniText}>Complaints grouped into repeated cluster cases.</p>
+                </div>
               </div>
             </section>
 
@@ -500,7 +582,7 @@ export default async function AuthorityComplaintsPage({
                 <div>
                   <h2 className={styles.sectionTitle}>Filter complaints</h2>
                   <p className={styles.sectionText}>
-                    Use search, category, area, and review filters to find unreviewed, urgent, or analytics-selected complaints.
+                    Use search, category, area, review, duplicate, and cluster filters to find unreviewed, urgent, or analytics-selected complaints.
                   </p>
                 </div>
               </div>
@@ -534,7 +616,24 @@ export default async function AuthorityComplaintsPage({
                       </span>
                     ) : null}
                     {selectedReview !== "all" ? (
-                      <span className={styles.chip}>Review: {selectedReview}</span>
+                      <span className={styles.chip}>
+                        Review: {reviewFilterLabel(selectedReview)}
+                      </span>
+                    ) : null}
+                    {selectedDuplicate === "linked" ? (
+                      <span className={styles.chip}>Duplicate linked</span>
+                    ) : null}
+                    {selectedDuplicateOf ? (
+                      <span className={styles.chip}>Duplicate source: {selectedDuplicateOf}</span>
+                    ) : null}
+                    {selectedCluster === "repeated" ? (
+                      <span className={styles.chip}>Repeated clusters</span>
+                    ) : null}
+                    {selectedClusterId ? (
+                      <span className={styles.chip}>Cluster: {selectedClusterId}</span>
+                    ) : null}
+                    {selectedPattern === "repeated" ? (
+                      <span className={styles.chip}>Repeated issue patterns</span>
                     ) : null}
                   </div>
                 </div>
@@ -616,6 +715,21 @@ export default async function AuthorityComplaintsPage({
                 {sourceContext ? (
                   <input type="hidden" name="source" value={sourceContext} />
                 ) : null}
+                {selectedDuplicate ? (
+                  <input type="hidden" name="duplicate" value={selectedDuplicate} />
+                ) : null}
+                {selectedDuplicateOf ? (
+                  <input type="hidden" name="duplicateOf" value={selectedDuplicateOf} />
+                ) : null}
+                {selectedCluster ? (
+                  <input type="hidden" name="cluster" value={selectedCluster} />
+                ) : null}
+                {selectedClusterId ? (
+                  <input type="hidden" name="clusterId" value={selectedClusterId} />
+                ) : null}
+                {selectedPattern ? (
+                  <input type="hidden" name="pattern" value={selectedPattern} />
+                ) : null}
 
                 <div className={styles.complaintsFilterActions}>
                   <button type="submit" className={styles.primaryButton}>
@@ -633,7 +747,7 @@ export default async function AuthorityComplaintsPage({
                 <div>
                   <h2 className={styles.sectionTitle}>Complaint list</h2>
                   <p className={styles.sectionText}>
-                    Compact operational list with image preview, authority-friendly AI guidance, and direct access to complaint detail.
+                    Compact operational list with only the key facts authorities need before opening the full review page.
                   </p>
                 </div>
               </div>
@@ -646,28 +760,21 @@ export default async function AuthorityComplaintsPage({
                     const ai = inferenceByComplaint.get(complaint.id);
                     const media = mediaByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
-                    const citizenAiConflict = parseBoolean(
-                      ai?.model_versions?.citizen_ai_conflict
-                    );
                     const manualReviewRequired = parseBoolean(
                       ai?.model_versions?.manual_review_required
                     );
                     const priorityRank = parseNumber(ai?.model_versions?.priority_rank);
-                    const escalationStatus =
-                      ai?.model_versions?.escalation_status ||
-                      ai?.model_versions?.escalation ||
-                      null;
+                    const urgencyScore = parseNumber(ai?.model_versions?.urgency_score);
 
-                    const derivedCategory =
+                    const finalCategory =
                       complaint.final_category ||
                       ai?.fusion_label ||
                       complaint.user_category ||
                       "Uncategorized";
 
-                    const readableSummary = shortenText(
-                      ai?.summary || complaint.description,
-                      150
-                    );
+                    const isRepeatedCluster =
+                      Boolean(complaint.cluster_id) &&
+                      (clusterCounts.get(complaint.cluster_id ?? "") ?? 0) > 1;
 
                     return (
                       <article key={complaint.id} className={styles.complaintsManagementRow}>
@@ -689,44 +796,29 @@ export default async function AuthorityComplaintsPage({
                           </div>
 
                           <p className={styles.complaintsManagementMeta}>
-                            Reporter: {complaint.reporter_name || "Unknown"} • Area:{" "}
-                            {getAreaName(complaint)} • Submitted: {formatDate(complaint.created_at)}
+                            Submitted {formatDate(complaint.created_at)} • Area: {getAreaName(complaint)} • Reporter: {complaint.reporter_name || "Unknown"}
                           </p>
-
-                          <p className={styles.complaintsManagementSubMeta}>
-                            Suggested category: {ai?.fusion_label || "Not available"} • AI confidence:{" "}
-                            {confidenceLabel(ai?.fusion_confidence)} • Queue:{" "}
-                            {priorityRank != null ? ordinal(priorityRank) : "Not computed"} •{" "}
-                            {friendlyEscalation(escalationStatus)}
-                          </p>
-
-                          {readableSummary ? (
-                            <p className={styles.complaintsManagementSubMeta}>
-                              {readableSummary}
-                            </p>
-                          ) : null}
 
                           <div className={styles.chipRow}>
-                            <span className={styles.chip}>
-                              Citizen: {complaint.user_category || "Not provided"}
-                            </span>
-                            <span className={styles.chip}>
-                              Final: {complaint.final_category || "Not set"}
-                            </span>
-                            <span className={styles.chip}>
-                              Category shown: {derivedCategory}
-                            </span>
+                            <span className={styles.chip}>Final: {finalCategory}</span>
                             <span className={reliabilityClass(reliability)}>
-                              {reliabilityLabel(reliability)}
+                              {manualReviewRequired ? "Manual review needed" : reliabilityLabel(reliability)}
                             </span>
-                            {manualReviewRequired ? (
-                              <span className={styles.chipWarn}>Manual review</span>
+                            <span className={styles.chip}>
+                              Queue {priorityRank != null ? ordinal(priorityRank) : "N/A"}
+                            </span>
+                            <span className={styles.chip}>
+                              Urgency {urgencyScore != null ? nicePercent(urgencyScore) : "N/A"}
+                            </span>
+                            {complaint.duplicate_of ? (
+                              <span className={styles.chipWarn}>
+                                Duplicate linked
+                              </span>
                             ) : null}
-                            {ai?.conflict_flag ? (
-                              <span className={styles.chipWarn}>Text/Image conflict</span>
-                            ) : null}
-                            {citizenAiConflict ? (
-                              <span className={styles.chipWarn}>Citizen/AI mismatch</span>
+                            {isRepeatedCluster ? (
+                              <span className={styles.chipWarn}>
+                                Repeated cluster
+                              </span>
                             ) : null}
                           </div>
                         </div>
