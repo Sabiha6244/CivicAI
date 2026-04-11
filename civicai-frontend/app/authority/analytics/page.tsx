@@ -1,3 +1,4 @@
+
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
@@ -17,6 +18,8 @@ type ComplaintRow = {
   final_category: string | null;
   cluster_id: string | null;
   duplicate_of: string | null;
+  lat: number | null;
+  lng: number | null;
 };
 
 type InferenceRow = {
@@ -33,6 +36,13 @@ type RankedItem = {
   share: number;
 };
 
+type ClusterSummary = {
+  clusterId: string;
+  count: number;
+  sampleArea: string;
+  sampleCategory: string;
+};
+
 function getAreaName(complaint: ComplaintRow) {
   return (
     complaint.city_area ||
@@ -41,12 +51,6 @@ function getAreaName(complaint: ComplaintRow) {
     complaint.address_label ||
     "Unknown"
   );
-}
-
-function niceLabel(value: string) {
-  return value
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function parseBoolean(value?: string | null) {
@@ -91,11 +95,21 @@ function buildComplaintsHref({
   review,
   area,
   category,
+  duplicate,
+  duplicateOf,
+  cluster,
+  clusterId,
+  pattern,
 }: {
   status?: string;
   review?: string;
   area?: string;
   category?: string;
+  duplicate?: string;
+  duplicateOf?: string;
+  cluster?: string;
+  clusterId?: string;
+  pattern?: string;
 }) {
   const search = new URLSearchParams();
   search.set("source", "analytics");
@@ -103,6 +117,11 @@ function buildComplaintsHref({
   if (review) search.set("review", review);
   if (area) search.set("area", area);
   if (category) search.set("category", category);
+  if (duplicate) search.set("duplicate", duplicate);
+  if (duplicateOf) search.set("duplicateOf", duplicateOf);
+  if (cluster) search.set("cluster", cluster);
+  if (clusterId) search.set("clusterId", clusterId);
+  if (pattern) search.set("pattern", pattern);
 
   return `/authority/complaints?${search.toString()}`;
 }
@@ -137,12 +156,32 @@ function MetricCard({
   return content;
 }
 
+function InsightCard({
+  label,
+  value,
+  text,
+}: {
+  label: string;
+  value: string | number;
+  text: string;
+}) {
+  return (
+    <div className={styles.summaryCard}>
+      <p className={styles.summaryLabel}>{label}</p>
+      <h3 className={styles.summaryValue}>{value}</h3>
+      <p className={styles.summaryText}>{text}</p>
+    </div>
+  );
+}
+
 function BarChart({
   title,
+  subtitle,
   items,
   fillClass,
 }: {
   title: string;
+  subtitle: string;
   items: RankedItem[];
   fillClass: string;
 }) {
@@ -151,7 +190,12 @@ function BarChart({
 
   return (
     <article className={styles.analyticsChartCard}>
-      <p className={styles.kvLabel}>{title}</p>
+      <h3 className={styles.sectionTitle} style={{ marginBottom: 8 }}>
+        {title}
+      </h3>
+      <p className={styles.sectionText} style={{ marginBottom: 14 }}>
+        {subtitle}
+      </p>
 
       {items.length === 0 ? (
         <p className={styles.kvValue}>No data available.</p>
@@ -171,7 +215,7 @@ function BarChart({
             return (
               <g key={item.label}>
                 <text x="16" y={y} className={styles.analyticsChartLabel}>
-                  {niceLabel(item.label)}
+                  {item.label}
                 </text>
 
                 <rect
@@ -235,8 +279,8 @@ function MiniCardGrid({
     type === "category"
       ? styles.analyticsMiniBarFillCategory
       : type === "area"
-      ? styles.analyticsMiniBarFillArea
-      : styles.analyticsMiniBarFillPattern;
+        ? styles.analyticsMiniBarFillArea
+        : styles.analyticsMiniBarFillPattern;
 
   return (
     <div className={styles.analyticsMiniGrid}>
@@ -245,8 +289,8 @@ function MiniCardGrid({
           type === "category"
             ? buildComplaintsHref({ category: item.label })
             : type === "area"
-            ? buildComplaintsHref({ area: item.label })
-            : buildPatternHref(item.label);
+              ? buildComplaintsHref({ area: item.label })
+              : buildPatternHref(item.label);
 
         return (
           <Link key={item.label} href={href} className={styles.analyticsMiniLink}>
@@ -280,6 +324,83 @@ function MiniCardGrid({
   );
 }
 
+function ClusterGrid({ items }: { items: ClusterSummary[] }) {
+  if (items.length === 0) {
+    return <div className={styles.emptyBox}>No repeated cluster groups available.</div>;
+  }
+
+  return (
+    <div className={styles.analyticsMiniGrid}>
+      {items.map((item) => (
+        <Link
+          key={item.clusterId}
+          href={buildComplaintsHref({ cluster: "repeated", clusterId: item.clusterId })}
+          className={styles.analyticsMiniLink}
+        >
+          <article className={styles.analyticsMiniCard}>
+            <div className={styles.analyticsMiniTop}>
+              <h3 className={styles.analyticsMiniTitle}>Cluster {item.clusterId}</h3>
+            </div>
+
+            <div className={styles.analyticsMiniBottom}>
+              <div className={styles.analyticsMiniMetaRow}>
+                <span className={styles.analyticsMiniMetaLabel}>Complaints</span>
+                <span className={styles.analyticsMiniMetaValue}>{item.count}</span>
+              </div>
+
+              <div className={styles.analyticsMiniBar}>
+                <div
+                  className={`${styles.analyticsMiniBarFill} ${styles.analyticsMiniBarFillPattern}`}
+                  style={{ width: `${Math.min(100, 18 + item.count * 16)}%` }}
+                />
+              </div>
+
+              <p className={styles.analyticsMiniShare}>
+                {item.sampleArea} • {item.sampleCategory}
+              </p>
+            </div>
+          </article>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function DuplicateLinkedList({
+  items,
+}: {
+  items: Array<{
+    id: string;
+    title: string;
+    area: string;
+    duplicateOf: string;
+  }>;
+}) {
+  if (items.length === 0) {
+    return <div className={styles.emptyBox}>No duplicate-linked complaints available.</div>;
+  }
+
+  return (
+    <div className={styles.dashboardInboxList}>
+      {items.map((item) => (
+        <Link
+          key={item.id}
+          href={buildComplaintsHref({ duplicate: "linked", duplicateOf: item.duplicateOf })}
+          className={styles.dashboardInboxItem}
+        >
+          <div className={styles.dashboardInboxItemTop}>
+            <h4 className={styles.dashboardInboxItemTitle}>{item.title}</h4>
+            <span className={styles.chip}>Duplicate</span>
+          </div>
+          <p className={styles.dashboardInboxItemMeta}>
+            {item.area} • Linked to complaint {item.duplicateOf}
+          </p>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export default async function AuthorityAnalyticsPage() {
   const cookieStore = await cookies();
 
@@ -291,8 +412,8 @@ export default async function AuthorityAnalyticsPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -333,7 +454,9 @@ export default async function AuthorityAnalyticsPage() {
       user_category,
       final_category,
       cluster_id,
-      duplicate_of
+      duplicate_of,
+      lat,
+      lng
     `)
     .order("created_at", { ascending: false });
 
@@ -371,12 +494,15 @@ export default async function AuthorityAnalyticsPage() {
   }
 
   const totalComplaints = complaints.length;
+  const mappedComplaintCount = complaints.filter(
+    (item) => item.lat != null && item.lng != null
+  ).length;
 
   const statusCounts = new Map<string, number>();
   const categoryCounts = new Map<string, number>();
   const areaCounts = new Map<string, number>();
   const repeatedPatternCounts = new Map<string, number>();
-  const clusterCounts = new Map<string, number>();
+  const clusterMeta = new Map<string, ClusterSummary>();
 
   let manualReviewCount = 0;
   let reliableCount = 0;
@@ -396,6 +522,7 @@ export default async function AuthorityAnalyticsPage() {
       ai?.fusion_label ||
       complaint.user_category ||
       "Uncategorized";
+
     categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
 
     const area = getAreaName(complaint);
@@ -408,10 +535,17 @@ export default async function AuthorityAnalyticsPage() {
     );
 
     if (complaint.cluster_id) {
-      clusterCounts.set(
-        complaint.cluster_id,
-        (clusterCounts.get(complaint.cluster_id) ?? 0) + 1
-      );
+      const existing = clusterMeta.get(complaint.cluster_id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        clusterMeta.set(complaint.cluster_id, {
+          clusterId: complaint.cluster_id,
+          count: 1,
+          sampleArea: area,
+          sampleCategory: category,
+        });
+      }
     }
 
     if (complaint.duplicate_of) {
@@ -466,11 +600,25 @@ export default async function AuthorityAnalyticsPage() {
     10
   );
 
+  const repeatedClusters = Array.from(clusterMeta.values())
+    .filter((item) => item.count > 1)
+    .sort((a, b) => b.count - a.count);
+
+  const duplicateLinkedItems = complaints
+    .filter((item) => Boolean(item.duplicate_of))
+    .slice(0, 8)
+    .map((item) => ({
+      id: item.id,
+      title: item.title || "Untitled complaint",
+      area: getAreaName(item),
+      duplicateOf: item.duplicate_of || "",
+    }));
+
   const statusChartItems = [
-    { label: "submitted", count: submittedCount, share: 0 },
-    { label: "processing", count: processingCount, share: 0 },
-    { label: "resolved", count: resolvedCombinedCount, share: 0 },
-    { label: "rejected", count: rejectedCount, share: 0 },
+    { label: "Submitted", count: submittedCount, share: 0 },
+    { label: "Processing", count: processingCount, share: 0 },
+    { label: "Resolved / Completed", count: resolvedCombinedCount, share: 0 },
+    { label: "Rejected", count: rejectedCount, share: 0 },
   ]
     .filter((item) => item.count > 0)
     .map((item) => ({
@@ -488,9 +636,11 @@ export default async function AuthorityAnalyticsPage() {
       .filter((value): value is number => value != null)
   );
 
-  const repeatedClusterGroups = Array.from(clusterCounts.values()).filter(
-    (count) => count > 1
-  ).length;
+  const manualReviewRate = totalComplaints > 0 ? manualReviewCount / totalComplaints : 0;
+  const reliableRate = totalComplaints > 0 ? reliableCount / totalComplaints : 0;
+  const conflictRate = totalComplaints > 0 ? conflictCount / totalComplaints : 0;
+  const closureRate = totalComplaints > 0 ? resolvedCombinedCount / totalComplaints : 0;
+  const mapCoverage = totalComplaints > 0 ? mappedComplaintCount / totalComplaints : 0;
 
   return (
     <main className={styles.page}>
@@ -512,9 +662,18 @@ export default async function AuthorityAnalyticsPage() {
                 <Link href="/authority" className={styles.sidebarLink}>
                   Authority dashboard
                 </Link>
+                <Link href="/authority/complaints" className={styles.sidebarLink}>
+                  Manage complaints
+                </Link>
+
+                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                  View Hotspots
+                </Link>
+
                 <Link href="/authority/analytics" className={styles.sidebarLinkActive}>
                   Authority analytics
                 </Link>
+
               </nav>
             </div>
           </aside>
@@ -524,8 +683,8 @@ export default async function AuthorityAnalyticsPage() {
               <p className={styles.eyebrow}>Authority analytics workspace</p>
               <h1 className={styles.title}>Complaint analytics and issue insights</h1>
               <p className={styles.subtitle}>
-                A clearer analytics dashboard for operational trends, priority
-                visibility, and category or area drill-downs into the complaints queue.
+                A cleaner analytics dashboard for operational trends, hotspot visibility,
+                and direct drill-downs into the complaint queue.
               </p>
 
               <div className={styles.statStrip}>
@@ -539,17 +698,19 @@ export default async function AuthorityAnalyticsPage() {
                   label="Open cases"
                   value={openCount}
                   text="Submitted and processing complaints still needing action."
-                />
-                <MetricCard
-                  label="Reliable AI"
-                  value={reliableCount}
-                  text="Complaints where AI can be used as a strong starting point."
+                  href={buildComplaintsHref({ status: "open" })}
                 />
                 <MetricCard
                   label="Manual review"
                   value={manualReviewCount}
                   text="Cases flagged for careful authority verification."
                   href={buildComplaintsHref({ review: "manual_review" })}
+                />
+                <MetricCard
+                  label="Conflict cases"
+                  value={conflictCount}
+                  text="Complaints where complaint signals do not align cleanly."
+                  href={buildComplaintsHref({ review: "conflict" })}
                 />
               </div>
             </section>
@@ -559,64 +720,98 @@ export default async function AuthorityAnalyticsPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>AI review insights</h2>
                   <p className={styles.sectionText}>
-                    High-level AI performance signals that authorities can understand quickly.
+                    This section gives a broader analytical overview of AI usage, review load, closure behaviour, and priority activity.
                   </p>
                 </div>
 
-                <Link href="/authority" className={styles.secondaryLink}>
-                  Back to dashboard
-                </Link>
+                <div className={styles.complaintsFilterActions}>
+                  <Link href="/authority/complaints" className={styles.primaryLink}>
+                    Manage complaints
+                  </Link>
+                  <Link href="/authority" className={styles.secondaryLink}>
+                    Back to dashboard
+                  </Link>
+                </div>
               </div>
 
               <div className={styles.summaryGrid}>
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Average AI confidence</p>
-                  <h3 className={styles.summaryValue}>
-                    {confidenceLabel(avgFusionConfidence)}
-                  </h3>
-                  <p className={styles.summaryText}>
-                    Average confidence of saved AI category suggestions.
-                  </p>
-                </div>
+                <InsightCard
+                  label="Average AI confidence"
+                  value={confidenceLabel(avgFusionConfidence)}
+                  text="Average confidence of saved AI category suggestions."
+                />
+                <InsightCard
+                  label="Priority computed"
+                  value={priorityComputedCount}
+                  text="Complaints with a computed queue position from the current priority logic."
+                />
+                <InsightCard
+                  label="Needs escalation now"
+                  value={escalateNowCount}
+                  text="Complaints that have exceeded the current response window."
+                />
+                <InsightCard
+                  label="Reliable AI cases"
+                  value={reliableCount}
+                  text="Complaints where the saved AI output is marked reliable."
+                />
+                <InsightCard
+                  label="Manual review rate"
+                  value={nicePercent(manualReviewRate)}
+                  text="Share of complaints currently needing closer human verification."
+                />
+                <InsightCard
+                  label="Conflict rate"
+                  value={nicePercent(conflictRate)}
+                  text="Share of complaints where complaint signals do not align cleanly."
+                />
+                <InsightCard
+                  label="Closure rate"
+                  value={nicePercent(closureRate)}
+                  text="Share of complaints already resolved or completed."
+                />
+                <InsightCard
+                  label="Map coverage"
+                  value={nicePercent(mapCoverage)}
+                  text="Share of complaints that currently include coordinates for hotspot mapping."
+                />
+              </div>
+            </section>
 
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Priority computed</p>
-                  <h3 className={styles.summaryValue}>{priorityComputedCount}</h3>
-                  <p className={styles.summaryText}>
-                    Complaints with a computed queue position from the current priority logic.
-                  </p>
-                </div>
-
-                <div className={styles.summaryCard}>
-                  <p className={styles.summaryLabel}>Needs escalation now</p>
-                  <h3 className={styles.summaryValue}>{escalateNowCount}</h3>
-                  <p className={styles.summaryText}>
-                    Complaints that have exceeded the current response window.
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Clickable drill-down cards</h2>
+                  <p className={styles.sectionText}>
+                    These cards open the complaint queue or the separate hotspot page with the intended filter or view.
                   </p>
                 </div>
               </div>
 
               <div className={styles.statStrip}>
                 <MetricCard
-                  label="Conflict cases"
-                  value={conflictCount}
-                  text="Cases where AI and complaint signals do not align cleanly."
-                  href={buildComplaintsHref({ review: "conflict" })}
+                  label="Open real hotspot map"
+                  value={mappedComplaintCount}
+                  text="Open the separate real map heatmap page built from complaint coordinates."
+                  href="/authority/analytics/hotspots"
                 />
                 <MetricCard
                   label="Duplicate linked"
                   value={duplicateLinkedCount}
-                  text="Complaints already linked to another complaint."
+                  text="Opens the complaint queue using the future duplicate-linked filter."
+                  href={buildComplaintsHref({ duplicate: "linked" })}
                 />
                 <MetricCard
                   label="Repeated clusters"
-                  value={repeatedClusterGroups}
-                  text="Cluster groups containing more than one complaint."
+                  value={repeatedClusters.length}
+                  text="Opens the complaint queue using the future repeated-cluster filter."
+                  href={buildComplaintsHref({ cluster: "repeated" })}
                 />
                 <MetricCard
-                  label="Avg confidence"
-                  value={nicePercent(avgFusionConfidence)}
-                  text="Average saved fusion confidence across AI-scored complaints."
+                  label="Frequent / repeated issues"
+                  value={repeatedPatterns.length}
+                  text="Opens the complaint queue using the future repeated-issue filter."
+                  href={buildComplaintsHref({ pattern: "repeated" })}
                 />
               </div>
             </section>
@@ -634,12 +829,14 @@ export default async function AuthorityAnalyticsPage() {
               <div className={styles.analyticsChartGrid}>
                 <BarChart
                   title="Complaint status distribution"
+                  subtitle="Current complaint counts by workflow stage."
                   items={statusChartItems}
                   fillClass={styles.analyticsChartFillTeal}
                 />
 
                 <BarChart
                   title="Top complaint categories"
+                  subtitle="Final category when available, otherwise the best available complaint category."
                   items={topCategories.slice(0, 5)}
                   fillClass={styles.analyticsChartFillBlue}
                 />
@@ -648,12 +845,14 @@ export default async function AuthorityAnalyticsPage() {
               <div className={styles.analyticsChartGrid}>
                 <BarChart
                   title="Top affected areas"
+                  subtitle="Areas currently receiving the highest number of complaints."
                   items={topAreas.slice(0, 5)}
                   fillClass={styles.analyticsChartFillTeal}
                 />
 
                 <BarChart
                   title="Repeated issue patterns"
+                  subtitle="Area and category combinations that recur most often."
                   items={repeatedPatterns.slice(0, 5)}
                   fillClass={styles.analyticsChartFillBlue}
                 />
@@ -676,6 +875,7 @@ export default async function AuthorityAnalyticsPage() {
                   label="Resolved / Completed"
                   value={resolvedCombinedCount}
                   text="Issues already closed by authority action."
+                  href={buildComplaintsHref({ status: "resolved_all" })}
                 />
                 <MetricCard
                   label="Rejected"
@@ -712,10 +912,10 @@ export default async function AuthorityAnalyticsPage() {
               <MiniCardGrid items={topAreas} type="area" />
             </section>
 
-            <section className={styles.section}>
+            <section className={styles.section} id="repeated-patterns">
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Repeated issue patterns</h2>
+                  <h2 className={styles.sectionTitle}>Frequent / repeated issue patterns</h2>
                   <p className={styles.sectionText}>
                     Click a repeated pattern card to open complaints filtered by both area and category.
                   </p>
@@ -723,6 +923,34 @@ export default async function AuthorityAnalyticsPage() {
               </div>
 
               <MiniCardGrid items={repeatedPatterns} type="pattern" />
+            </section>
+
+            <section className={styles.section} id="repeated-clusters">
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Repeated cluster groups</h2>
+                  <p className={styles.sectionText}>
+                    Cluster cards now carry future queue filter parameters for repeated-cluster review.
+                  </p>
+                </div>
+              </div>
+
+              <ClusterGrid items={repeatedClusters} />
+            </section>
+
+            <section className={styles.section} id="duplicate-linked">
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Duplicate-linked complaints</h2>
+                  <p className={styles.sectionText}>
+                    These links now carry future duplicate filter parameters into the complaint queue.
+                  </p>
+                </div>
+              </div>
+
+              <article className={styles.dashboardInboxCard}>
+                <DuplicateLinkedList items={duplicateLinkedItems} />
+              </article>
             </section>
           </div>
         </section>

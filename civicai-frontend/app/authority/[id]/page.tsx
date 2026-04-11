@@ -35,6 +35,8 @@ type ComplaintMediaRow = {
   created_at: string;
 };
 
+type ModelVersions = Record<string, unknown>;
+
 type InferenceRow = {
   complaint_id: string;
   text_label: string | null;
@@ -48,7 +50,7 @@ type InferenceRow = {
   priority: string | null;
   priority_score: number | null;
   summary: string | null;
-  model_versions: Record<string, string> | null;
+  model_versions: ModelVersions | null;
   detected_image_url: string | null;
   detected_image_path: string | null;
   created_at: string | null;
@@ -67,15 +69,36 @@ function nicePercent(value?: number | null) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function parseNumber(value?: string | null) {
-  if (!value) return null;
+function parseNumber(value: unknown) {
+  if (value == null) return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }
 
-function parseBoolean(value?: string | null) {
-  if (!value) return false;
-  return value.toLowerCase() === "true";
+function parseBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (value == null) return false;
+  return String(value).toLowerCase() === "true";
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (value == null) return null;
+
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value !== "string") return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function statusClass(status: string) {
@@ -281,19 +304,85 @@ export default async function AuthorityComplaintDetailPage({
     .eq("complaint_id", id)
     .maybeSingle();
 
+  let duplicateIds: string[] = [];
+  let duplicateComplaints: Array<{
+    id: string;
+    title: string | null;
+    status: string;
+    created_at: string;
+  }> = [];
+
+  const apiBaseUrl =
+    process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
+
+  try {
+    const dupRes = await fetch(`${apiBaseUrl}/complaints/${id}/duplicates`, {
+      cache: "no-store",
+    });
+
+    if (dupRes.ok) {
+      const dupData = await dupRes.json();
+      duplicateIds = Array.isArray(dupData?.duplicates) ? dupData.duplicates : [];
+
+      if (duplicateIds.length > 0) {
+        const { data: dupRows } = await supabase
+          .from("complaints")
+          .select("id, title, status, created_at")
+          .in("id", duplicateIds)
+          .order("created_at", { ascending: false });
+
+        duplicateComplaints = dupRows || [];
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to fetch duplicates", e);
+  }
+
   const media = ((mediaRows ?? [])[0] ?? null) as ComplaintMediaRow | null;
   const ai = (inferenceRow ?? null) as InferenceRow | null;
-  const modelVersions = ai?.model_versions ?? null;
+  const modelVersions = (ai?.model_versions ?? null) as ModelVersions | null;
 
-  const reliabilityStatus = modelVersions?.reliability_status ?? null;
+  const priorityRaw = parseJsonRecord(modelVersions?.priority_raw);
+  const priorityNormalized = parseJsonRecord(modelVersions?.priority_normalized);
+  const escalationObject = parseJsonRecord(modelVersions?.escalation);
+
+  const reliabilityStatus =
+    typeof modelVersions?.reliability_status === "string"
+      ? modelVersions.reliability_status
+      : null;
+
   const manualReviewRequired = parseBoolean(modelVersions?.manual_review_required);
   const citizenAiConflict = parseBoolean(modelVersions?.citizen_ai_conflict);
 
-  const priorityStatus = modelVersions?.priority_status ?? null;
-  const priorityReason = modelVersions?.priority_reason || null;
+  const priorityStatus =
+    typeof modelVersions?.priority_status === "string"
+      ? modelVersions.priority_status
+      : null;
+
+  const priorityReason =
+    typeof modelVersions?.priority_reason === "string"
+      ? modelVersions.priority_reason
+      : null;
+
   const priorityRank = parseNumber(modelVersions?.priority_rank);
+
   const escalationStatus =
-    modelVersions?.escalation_status || modelVersions?.escalation || null;
+    typeof modelVersions?.escalation_status === "string"
+      ? modelVersions.escalation_status
+      : typeof escalationObject?.should_escalate === "boolean"
+        ? escalationObject.should_escalate
+          ? "escalate_now"
+          : "within_threshold"
+        : null;
+
+  const frequencyRaw = parseNumber(priorityRaw?.complaint_frequency);
+  const frequencyNormalized = parseNumber(priorityNormalized?.complaint_frequency);
+
+  const urgencyScoreRaw = parseNumber(modelVersions?.urgency_score);
+  const urgencyPercent =
+    urgencyScoreRaw != null ? Math.round(urgencyScoreRaw * 100) : null;
+
+  const duplicateCount = duplicateComplaints.length;
 
   const readableConfidence = confidenceLabel(ai?.fusion_confidence);
   const readableEscalation = friendlyEscalation(escalationStatus);
@@ -409,7 +498,6 @@ export default async function AuthorityComplaintDetailPage({
                             complaint.upazila,
                             complaint.district,
                             complaint.division,
-                            complaint.division,
                           ]
                             .filter(Boolean)
                             .join(", ") || "Not provided"}
@@ -449,9 +537,7 @@ export default async function AuthorityComplaintDetailPage({
 
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>AI suggested category</p>
-                        <p className={styles.kvValue}>
-                          {ai?.fusion_label || "N/A"}
-                        </p>
+                        <p className={styles.kvValue}>{ai?.fusion_label || "N/A"}</p>
                       </div>
 
                       <div className={styles.infoBox}>
@@ -617,6 +703,29 @@ export default async function AuthorityComplaintDetailPage({
                         <p className={styles.aiStatLabel}>Response window</p>
                         <p className={styles.aiStatValue}>{readableEscalation}</p>
                       </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Urgency score</p>
+                        <p className={styles.aiStatValue}>
+                          {urgencyPercent != null ? `${urgencyPercent}%` : "N/A"}
+                        </p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Frequency (area)</p>
+                        <p className={styles.aiStatValue}>
+                          {frequencyRaw != null
+                            ? `${frequencyRaw}`
+                            : frequencyNormalized != null
+                              ? nicePercent(frequencyNormalized)
+                              : "N/A"}
+                        </p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Duplicate matches</p>
+                        <p className={styles.aiStatValue}>{duplicateCount}</p>
+                      </div>
                     </div>
 
                     <div
@@ -629,6 +738,34 @@ export default async function AuthorityComplaintDetailPage({
                       <p className={styles.kvLabel}>Priority note</p>
                       <p className={styles.kvValue}>{priorityNote}</p>
                     </div>
+                  </div>
+                </article>
+
+                <article className={styles.panel}>
+                  <h2 className={styles.panelTitle}>
+                    Possible duplicates {duplicateCount > 0 ? `(${duplicateCount})` : ""}
+                  </h2>
+
+                  <div className={styles.panelBody}>
+                    {duplicateComplaints.length === 0 ? (
+                      <p className={styles.kvValue}>No similar complaints found nearby.</p>
+                    ) : (
+                      <ul className={styles.duplicateList}>
+                        {duplicateComplaints.map((dup) => (
+                          <li key={dup.id} className={styles.duplicateItem}>
+                            <Link href={`/authority/${dup.id}`} className={styles.duplicateLink}>
+                              <span className={styles.duplicateTitle}>
+                                {dup.title || "Untitled complaint"}
+                              </span>
+                              <span className={statusClass(dup.status)}>{dup.status}</span>
+                              <span className={styles.duplicateDate}>
+                                {formatDate(dup.created_at)}
+                              </span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 </article>
               </section>

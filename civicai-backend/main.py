@@ -14,11 +14,14 @@ import requests
 import torch
 from PIL import Image
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from ultralytics import YOLO
+from sklearn.cluster import DBSCAN
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
@@ -40,6 +43,15 @@ INFERENCE_IMAGE_BUCKET = os.getenv("SUPABASE_INFERENCE_IMAGE_BUCKET", "complaint
 
 SENTIMENT_ANALYZER = SentimentIntensityAnalyzer()
 
+HOTSPOT_EPS_METERS = float(os.getenv("HOTSPOT_EPS_METERS", "100"))
+HOTSPOT_MIN_SAMPLES = int(os.getenv("HOTSPOT_MIN_SAMPLES", "3"))
+
+DUPLICATE_TEXT_THRESHOLD = float(os.getenv("DUPLICATE_TEXT_THRESHOLD", "0.85"))
+DUPLICATE_LOCATION_RADIUS_M = float(os.getenv("DUPLICATE_LOCATION_RADIUS_M", "50"))
+DUPLICATE_TIME_WINDOW_HOURS = float(os.getenv("DUPLICATE_TIME_WINDOW_HOURS", "24"))
+
+FREQUENCY_RADIUS_M = float(os.getenv("FREQUENCY_RADIUS_M", "500"))
+FREQUENCY_TIME_WINDOW_DAYS = float(os.getenv("FREQUENCY_TIME_WINDOW_DAYS", "7"))
 
 OTP_TTL_MINUTES = 10
 OTP_COOLDOWN_SECONDS = 60
@@ -1213,6 +1225,320 @@ def get_open_complaint_rows(limit: int = 500) -> list[Dict[str, Any]]:
     return open_rows
 
 
+
+def parse_iso_datetime(value: Any) -> datetime:
+    if value is None or str(value).strip() == "":
+        raise HTTPException(status_code=500, detail="Datetime value is required.")
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def get_complaint_coordinates(complaint: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+    lat_raw = complaint.get("lat")
+    lng_raw = complaint.get("lng")
+
+    if lat_raw is None and "latitude" in complaint:
+        lat_raw = complaint.get("latitude")
+    if lng_raw is None and "longitude" in complaint:
+        lng_raw = complaint.get("longitude")
+
+    if lat_raw is None or lng_raw is None:
+        return None, None
+
+    try:
+        return float(lat_raw), float(lng_raw)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def build_complaint_text(title: str, description: str) -> str:
+    return normalize_text(f"{title}. {description}")
+
+
+def get_effective_final_category(
+    complaint: Dict[str, Any],
+    inference_row: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    final_category = complaint.get("final_category")
+    if final_category:
+        return str(final_category)
+
+    if inference_row and inference_row.get("fusion_label"):
+        return str(inference_row.get("fusion_label"))
+
+    return map_citizen_category_to_internal(complaint.get("user_category"))
+
+
+def upsert_current_complaint_into_pool(
+    pool: list[Dict[str, Any]],
+    current_complaint: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    current_id = str(current_complaint.get("id") or "")
+    updated_pool: list[Dict[str, Any]] = []
+    replaced = False
+
+    for row in pool:
+        if str(row.get("id") or "") == current_id:
+            updated_pool.append(current_complaint)
+            replaced = True
+        else:
+            updated_pool.append(row)
+
+    if not replaced:
+        updated_pool.append(current_complaint)
+
+    return updated_pool
+
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius_m = 6371000.0
+
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(lat2)
+    delta_phi = np.radians(lat2 - lat1)
+    delta_lambda = np.radians(lon2 - lon1)
+
+    a = (
+        np.sin(delta_phi / 2.0) ** 2
+        + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2.0) ** 2
+    )
+    c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    return float(earth_radius_m * c)
+
+
+def get_text_embedding(text: str) -> np.ndarray:
+    tokenizer, model, _ = load_text_assets()
+    device = next(model.parameters()).device
+
+    encoded = tokenizer(
+        text,
+        truncation=True,
+        padding="max_length",
+        max_length=256,
+        return_tensors="pt",
+    )
+    encoded = {k: v.to(device) for k, v in encoded.items()}
+
+    with torch.no_grad():
+        outputs = model(**encoded, output_hidden_states=True)
+        cls_embedding = outputs.hidden_states[-1][:, 0, :].detach().cpu().numpy()
+
+    return cls_embedding[0]
+
+
+def detect_duplicates_for_complaint(
+    target_complaint: Dict[str, Any],
+    all_open_complaints: list[Dict[str, Any]],
+    text_threshold: float,
+    location_radius_m: float,
+    time_window_hours: float,
+) -> list[str]:
+    target_lat, target_lng = get_complaint_coordinates(target_complaint)
+    if target_lat is None or target_lng is None:
+        return []
+
+    target_text = build_complaint_text(
+        target_complaint.get("title") or "",
+        target_complaint.get("description") or "",
+    )
+    if not target_text:
+        return []
+
+    target_embedding = get_text_embedding(target_text).reshape(1, -1)
+    target_time = parse_iso_datetime(target_complaint.get("created_at"))
+    max_time_delta_seconds = float(time_window_hours) * 3600.0
+
+    duplicates: list[str] = []
+    for other in all_open_complaints:
+        other_id = str(other.get("id") or "")
+        if other_id == str(target_complaint.get("id") or ""):
+            continue
+
+        other_lat, other_lng = get_complaint_coordinates(other)
+        if other_lat is None or other_lng is None:
+            continue
+
+        distance_m = haversine_distance(target_lat, target_lng, other_lat, other_lng)
+        if distance_m > float(location_radius_m):
+            continue
+
+        try:
+            other_time = parse_iso_datetime(other.get("created_at"))
+        except Exception:
+            continue
+
+        if abs((target_time - other_time).total_seconds()) > max_time_delta_seconds:
+            continue
+
+        other_text = build_complaint_text(
+            other.get("title") or "",
+            other.get("description") or "",
+        )
+        if not other_text:
+            continue
+
+        other_embedding = get_text_embedding(other_text).reshape(1, -1)
+        similarity = float(cosine_similarity(target_embedding, other_embedding)[0][0])
+
+        if similarity > float(text_threshold):
+            duplicates.append(other_id)
+
+    return duplicates
+
+
+def compute_frequency_score(
+    complaint: Dict[str, Any],
+    all_open_complaints: list[Dict[str, Any]],
+    inference_map: Optional[dict[str, Dict[str, Any]]] = None,
+    radius_m: float = FREQUENCY_RADIUS_M,
+    days: float = FREQUENCY_TIME_WINDOW_DAYS,
+) -> int:
+    inference_map = inference_map or {}
+
+    target_id = str(complaint.get("id") or "")
+    target_lat, target_lng = get_complaint_coordinates(complaint)
+    if target_lat is None or target_lng is None:
+        return 0
+
+    target_category = get_effective_final_category(
+        complaint,
+        inference_map.get(target_id),
+    )
+    if not target_category:
+        return 0
+
+    try:
+        target_time = parse_iso_datetime(complaint.get("created_at"))
+    except Exception:
+        return 0
+
+    max_age_seconds = float(days) * 86400.0
+    count = 0
+
+    for other in all_open_complaints:
+        other_id = str(other.get("id") or "")
+        if other_id == target_id:
+            continue
+
+        other_lat, other_lng = get_complaint_coordinates(other)
+        if other_lat is None or other_lng is None:
+            continue
+
+        other_category = get_effective_final_category(
+            other,
+            inference_map.get(other_id),
+        )
+        if other_category != target_category:
+            continue
+
+        distance_m = haversine_distance(target_lat, target_lng, other_lat, other_lng)
+        if distance_m > float(radius_m):
+            continue
+
+        try:
+            other_time = parse_iso_datetime(other.get("created_at"))
+        except Exception:
+            continue
+
+        if other_time > target_time:
+            continue
+
+        if (target_time - other_time).total_seconds() > max_age_seconds:
+            continue
+
+        count += 1
+
+    return count
+
+
+def find_hotspots(
+    complaints: list[Dict[str, Any]],
+    inference_map: Optional[dict[str, Dict[str, Any]]] = None,
+    eps_meters: float = HOTSPOT_EPS_METERS,
+    min_samples: int = HOTSPOT_MIN_SAMPLES,
+) -> Dict[str, Any]:
+    inference_map = inference_map or {}
+
+    valid_complaints: list[Dict[str, Any]] = []
+    coords: list[tuple[float, float]] = []
+
+    for complaint in complaints:
+        lat, lng = get_complaint_coordinates(complaint)
+        if lat is None or lng is None:
+            continue
+        valid_complaints.append(complaint)
+        coords.append((lat, lng))
+
+    if len(valid_complaints) < int(min_samples):
+        return {"type": "FeatureCollection", "features": []}
+
+    n = len(coords)
+    distance_matrix = np.zeros((n, n), dtype=float)
+
+    for i in range(n):
+        lat_i, lng_i = coords[i]
+        for j in range(i + 1, n):
+            lat_j, lng_j = coords[j]
+            distance_m = haversine_distance(lat_i, lng_i, lat_j, lng_j)
+            distance_matrix[i, j] = distance_m
+            distance_matrix[j, i] = distance_m
+
+    clustering = DBSCAN(
+        eps=float(eps_meters),
+        min_samples=int(min_samples),
+        metric="precomputed",
+    )
+    labels = clustering.fit_predict(distance_matrix)
+
+    features: list[Dict[str, Any]] = []
+    for cluster_id in sorted(set(labels)):
+        if int(cluster_id) == -1:
+            continue
+
+        member_indices = [idx for idx, label in enumerate(labels) if int(label) == int(cluster_id)]
+        cluster_rows = [valid_complaints[idx] for idx in member_indices]
+        cluster_lats = [coords[idx][0] for idx in member_indices]
+        cluster_lngs = [coords[idx][1] for idx in member_indices]
+
+        categories = sorted(
+            {
+                cat
+                for cat in (
+                    get_effective_final_category(
+                        row,
+                        inference_map.get(str(row.get("id") or "")),
+                    )
+                    for row in cluster_rows
+                )
+                if cat
+            }
+        )
+
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        safe_float(float(np.mean(cluster_lngs))),
+                        safe_float(float(np.mean(cluster_lats))),
+                    ],
+                },
+                "properties": {
+                    "cluster_id": int(cluster_id),
+                    "count": len(cluster_rows),
+                    "complaint_ids": [str(row.get("id")) for row in cluster_rows if row.get("id")],
+                    "categories": categories,
+                },
+            }
+        )
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+
+
 def calculate_priority_exact(
     current_complaint: Dict[str, Any],
     current_fusion_confidence: float,
@@ -1222,6 +1548,7 @@ def calculate_priority_exact(
     1) urgency from sentiment: p_i = (s_i + 1) / 2
     2) SAW normalization and ranking over the active complaint pool
     3) exact escalation condition based on elapsed time and unresolved status
+    4) frequency is included when CIVICAI_SAW_CRITERIA_JSON contains complaint_frequency
     """
     try:
         criteria = get_saw_criteria()
@@ -1233,6 +1560,7 @@ def calculate_priority_exact(
             "score": None,
             "rank": None,
             "urgency_score": None,
+            "frequency_score": None,
             "normalized": {},
             "raw": {},
             "escalation": None,
@@ -1248,6 +1576,7 @@ def calculate_priority_exact(
             "score": None,
             "rank": None,
             "urgency_score": None,
+            "frequency_score": None,
             "normalized": {},
             "raw": {},
             "escalation": None,
@@ -1264,6 +1593,7 @@ def calculate_priority_exact(
             "score": None,
             "rank": None,
             "urgency_score": None,
+            "frequency_score": None,
             "normalized": {},
             "raw": {},
             "escalation": None,
@@ -1273,8 +1603,24 @@ def calculate_priority_exact(
 
     current_id = str(current_complaint.get("id") or "")
     pool = get_open_complaint_rows(limit=500)
+    pool = upsert_current_complaint_into_pool(pool, current_complaint)
+
     complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
     inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
+
+    needs_frequency = any(criterion["field"] == "complaint_frequency" for criterion in criteria)
+    frequency_cache: dict[str, int] = {}
+
+    if needs_frequency:
+        for row in pool:
+            row_id = str(row.get("id") or "")
+            frequency_cache[row_id] = compute_frequency_score(
+                complaint=row,
+                all_open_complaints=pool,
+                inference_map=inference_map,
+                radius_m=FREQUENCY_RADIUS_M,
+                days=FREQUENCY_TIME_WINDOW_DAYS,
+            )
 
     alternatives: list[dict[str, Any]] = []
     required_fields = {criterion["field"] for criterion in criteria}
@@ -1302,15 +1648,20 @@ def calculate_priority_exact(
 
         alternative = {
             "id": complaint_id,
-            "urgency_score": urgency_score,
+            "urgency_score": safe_float(urgency_score),
             "fusion_confidence": safe_float(fusion_confidence),
-            "elapsed_hours": elapsed_hours,
+            "elapsed_hours": safe_float(elapsed_hours),
         }
+
+        if needs_frequency:
+            alternative["complaint_frequency"] = int(frequency_cache.get(complaint_id, 0))
 
         if any(alternative.get(field) is None for field in required_fields):
             continue
 
         alternatives.append(alternative)
+
+    current_frequency_score = frequency_cache.get(current_id) if needs_frequency else None
 
     if not alternatives:
         return {
@@ -1318,7 +1669,8 @@ def calculate_priority_exact(
             "reason": "No valid complaint pool available for exact SAW ranking.",
             "score": None,
             "rank": None,
-            "urgency_score": current_urgency,
+            "urgency_score": safe_float(current_urgency),
+            "frequency_score": current_frequency_score,
             "normalized": {},
             "raw": {},
             "escalation": None,
@@ -1334,10 +1686,22 @@ def calculate_priority_exact(
 
         current_alternative = {
             "id": current_id,
-            "urgency_score": current_urgency,
+            "urgency_score": safe_float(current_urgency),
             "fusion_confidence": safe_float(current_fusion_confidence),
             "elapsed_hours": current_elapsed,
         }
+
+        if needs_frequency:
+            current_alternative["complaint_frequency"] = int(
+                compute_frequency_score(
+                    complaint=current_complaint,
+                    all_open_complaints=pool,
+                    inference_map=inference_map,
+                    radius_m=FREQUENCY_RADIUS_M,
+                    days=FREQUENCY_TIME_WINDOW_DAYS,
+                )
+            )
+            current_frequency_score = current_alternative["complaint_frequency"]
 
         if all(current_alternative.get(field) is not None for field in required_fields):
             alternatives.append(current_alternative)
@@ -1351,7 +1715,8 @@ def calculate_priority_exact(
             "reason": "Current complaint could not be ranked in the exact SAW pool.",
             "score": None,
             "rank": None,
-            "urgency_score": current_urgency,
+            "urgency_score": safe_float(current_urgency),
+            "frequency_score": current_frequency_score,
             "normalized": {},
             "raw": {},
             "escalation": None,
@@ -1377,18 +1742,26 @@ def calculate_priority_exact(
         f"Status: {current_complaint.get('status') or 'unknown'}"
     )
 
+    raw_values = dict(current_row["raw"])
+    normalized_values = dict(current_row["normalized"])
+
+    if needs_frequency and current_frequency_score is None:
+        current_frequency_score = int(raw_values.get("complaint_frequency", 0))
+
     return {
         "status": "computed",
         "reason": None,
         "score": safe_float(current_row["score"]),
         "rank": int(current_row["rank"]),
         "urgency_score": safe_float(current_urgency),
-        "normalized": current_row["normalized"],
-        "raw": current_row["raw"],
+        "frequency_score": current_frequency_score,
+        "normalized": normalized_values,
+        "raw": raw_values,
         "escalation": escalation,
         "escalation_status": escalation_status,
         "escalation_reason": escalation_reason,
     }
+
 
 def build_quality_flags(
     text_result: Dict[str, Any],
@@ -1575,6 +1948,7 @@ def otp_verify(body: VerifyOtpReq):
     }
 
 
+
 @app.post("/ai/run/{complaint_id}")
 def run_ai_for_complaint(complaint_id: str):
     require_backend_env()
@@ -1603,6 +1977,7 @@ def run_ai_for_complaint(complaint_id: str):
     )
 
     decision_result = resolve_final_prediction(text_result, image_result)
+    complaint["final_category"] = decision_result.get("final_label")
 
     summary = simple_summary(
         title=complaint.get("title") or "",
@@ -1626,6 +2001,28 @@ def run_ai_for_complaint(complaint_id: str):
         citizen_category_internal
         and decision_result.get("final_label")
         and citizen_category_internal != decision_result.get("final_label")
+    )
+
+    pool = get_open_complaint_rows(limit=500)
+    pool = upsert_current_complaint_into_pool(pool, complaint)
+    complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
+    inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
+
+    duplicate_ids = detect_duplicates_for_complaint(
+        target_complaint=complaint,
+        all_open_complaints=pool,
+        text_threshold=DUPLICATE_TEXT_THRESHOLD,
+        location_radius_m=DUPLICATE_LOCATION_RADIUS_M,
+        time_window_hours=DUPLICATE_TIME_WINDOW_HOURS,
+    )
+    duplicate_count = len(duplicate_ids)
+
+    frequency_score = compute_frequency_score(
+        complaint=complaint,
+        all_open_complaints=pool,
+        inference_map=inference_map,
+        radius_m=FREQUENCY_RADIUS_M,
+        days=FREQUENCY_TIME_WINDOW_DAYS,
     )
 
     priority_result = calculate_priority_exact(
@@ -1668,6 +2065,14 @@ def run_ai_for_complaint(complaint_id: str):
         "priority_normalized": priority_result.get("normalized"),
         "priority_raw": priority_result.get("raw"),
         "urgency_score": priority_result.get("urgency_score"),
+        "frequency_score": priority_result.get("frequency_score", frequency_score),
+        "duplicate_count": duplicate_count,
+        "duplicate_ids": duplicate_ids,
+        "duplicate_text_threshold": DUPLICATE_TEXT_THRESHOLD,
+        "duplicate_location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
+        "duplicate_time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
+        "frequency_radius_m": FREQUENCY_RADIUS_M,
+        "frequency_time_window_days": FREQUENCY_TIME_WINDOW_DAYS,
         "escalation": priority_result.get("escalation"),
         "escalation_status": priority_result.get("escalation_status"),
         "escalation_reason": priority_result.get("escalation_reason"),
@@ -1705,6 +2110,9 @@ def run_ai_for_complaint(complaint_id: str):
         "citizen_category": citizen_category_raw,
         "citizen_category_internal": citizen_category_internal,
         "citizen_ai_conflict": citizen_ai_conflict,
+        "duplicate_ids": duplicate_ids,
+        "duplicate_count": duplicate_count,
+        "frequency_score": frequency_score,
         "text_result": {
             "label_full_18": text_result.get("label"),
             "confidence_full_18": text_result.get("confidence"),
@@ -1727,4 +2135,49 @@ def run_ai_for_complaint(complaint_id: str):
         "reliability_status": reliability["reliability_status"],
         "manual_review_required": reliability["manual_review_required"],
         "quality_flags": reliability["quality_flags"],
+    }
+
+
+@app.get("/analytics/hotspots")
+def get_hotspots(
+    eps: Optional[float] = Query(None, description="Cluster radius in meters. Defaults to HOTSPOT_EPS_METERS."),
+    min_samples: Optional[int] = Query(None, description="Minimum points per cluster. Defaults to HOTSPOT_MIN_SAMPLES."),
+):
+    require_backend_env()
+
+    pool = get_open_complaint_rows(limit=500)
+    complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
+    inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
+
+    return find_hotspots(
+        complaints=pool,
+        inference_map=inference_map,
+        eps_meters=eps if eps is not None else HOTSPOT_EPS_METERS,
+        min_samples=min_samples if min_samples is not None else HOTSPOT_MIN_SAMPLES,
+    )
+
+
+@app.get("/complaints/{complaint_id}/duplicates")
+def get_duplicates_for_complaint(complaint_id: str):
+    require_backend_env()
+
+    complaint = get_complaint_row(complaint_id)
+    pool = get_open_complaint_rows(limit=500)
+    pool = upsert_current_complaint_into_pool(pool, complaint)
+
+    duplicate_ids = detect_duplicates_for_complaint(
+        target_complaint=complaint,
+        all_open_complaints=pool,
+        text_threshold=DUPLICATE_TEXT_THRESHOLD,
+        location_radius_m=DUPLICATE_LOCATION_RADIUS_M,
+        time_window_hours=DUPLICATE_TIME_WINDOW_HOURS,
+    )
+
+    return {
+        "complaint_id": complaint_id,
+        "duplicate_count": len(duplicate_ids),
+        "duplicate_ids": duplicate_ids,
+        "text_threshold": DUPLICATE_TEXT_THRESHOLD,
+        "location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
+        "time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
     }

@@ -1981,3 +1981,48 @@
 .metricCardLink:focus-visible {
   outline: none;
 }
+
+/* Duplicate list styles */
+.duplicateList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.duplicateItem {
+  border-bottom: 1px solid var(--border-light, #e5e7eb);
+  padding: 0.75rem 0;
+}
+
+.duplicateItem:last-child {
+  border-bottom: none;
+}
+
+.duplicateLink {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.2s;
+  padding: 0.25rem 0;
+}
+
+.duplicateLink:hover {
+  background-color: var(--hover-bg, #f9fafb);
+  border-radius: 6px;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.duplicateTitle {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary, #111827);
+}
+
+.duplicateDate {
+  font-size: 0.8rem;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}

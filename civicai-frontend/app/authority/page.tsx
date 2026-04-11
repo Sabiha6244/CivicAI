@@ -1,3 +1,4 @@
+
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
@@ -44,6 +45,12 @@ type RankedItem = {
   label: string;
   count: number;
   share: number;
+};
+
+type SeriesDef = {
+  label: string;
+  values: number[];
+  stroke: string;
 };
 
 function formatDate(value: string) {
@@ -118,7 +125,7 @@ function reliabilityLabel(value?: string | null) {
     case "insufficient_evidence":
       return "Insufficient evidence";
     default:
-      return "Not available";
+      return "Review status unavailable";
   }
 }
 
@@ -155,18 +162,6 @@ function getAreaName(complaint: ComplaintRow) {
   return complaint.city_area || complaint.upazila || complaint.district || "Unknown";
 }
 
-function shortenText(text?: string | null, max = 120) {
-  if (!text) return "";
-  const clean = text.trim().replace(/\s+/g, " ");
-  if (clean.length <= max) return clean;
-
-  const sliced = clean.slice(0, max);
-  const lastSpace = sliced.lastIndexOf(" ");
-  const shortened = lastSpace > 0 ? sliced.slice(0, lastSpace) : sliced;
-
-  return `${shortened}...`;
-}
-
 function countMapToSortedList(
   map: Map<string, number>,
   total: number,
@@ -187,17 +182,20 @@ function buildComplaintsHref({
   review,
   area,
   category,
+  source,
 }: {
   status?: string;
   review?: string;
   area?: string;
   category?: string;
+  source?: string;
 }) {
   const search = new URLSearchParams();
   if (status) search.set("status", status);
   if (review) search.set("review", review);
   if (area) search.set("area", area);
   if (category) search.set("category", category);
+  if (source) search.set("source", source);
 
   const qs = search.toString();
   return qs ? `/authority/complaints?${qs}` : "/authority/complaints";
@@ -235,10 +233,12 @@ function MetricCard({
 
 function BarChart({
   title,
+  subtitle,
   items,
   fillClass,
 }: {
   title: string;
+  subtitle: string;
   items: RankedItem[];
   fillClass: string;
 }) {
@@ -247,7 +247,8 @@ function BarChart({
 
   return (
     <article className={styles.analyticsChartCard}>
-      <p className={styles.kvLabel}>{title}</p>
+      <h3 className={styles.sectionTitle} style={{ marginBottom: 10 }}>{title}</h3>
+      <p className={styles.sectionText} style={{ marginBottom: 14 }}>{subtitle}</p>
 
       {items.length === 0 ? (
         <p className={styles.kvValue}>No data available.</p>
@@ -305,6 +306,146 @@ function BarChart({
   );
 }
 
+function LineChart({
+  title,
+  subtitle,
+  yAxisLabel,
+  labels,
+  series,
+}: {
+  title: string;
+  subtitle: string;
+  yAxisLabel: string;
+  labels: string[];
+  series: SeriesDef[];
+}) {
+  const width = 760;
+  const height = 340;
+  const margin = { top: 54, right: 26, bottom: 56, left: 56 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const maxValue = Math.max(
+    1,
+    ...series.flatMap((item) => item.values),
+  );
+  const ticks = 4;
+
+  const xFor = (index: number) => {
+    if (labels.length <= 1) return margin.left + plotWidth / 2;
+    return margin.left + (plotWidth * index) / (labels.length - 1);
+  };
+
+  const yFor = (value: number) =>
+    margin.top + plotHeight - (value / maxValue) * plotHeight;
+
+  const pathFor = (values: number[]) =>
+    values
+      .map((value, index) => {
+        const x = xFor(index);
+        const y = yFor(value);
+        return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+      })
+      .join(" ");
+
+  return (
+    <article className={styles.analyticsChartCard}>
+      <h3 className={styles.sectionTitle} style={{ marginBottom: 10 }}>{title}</h3>
+      <p className={styles.sectionText} style={{ marginBottom: 6 }}>{subtitle}</p>
+      <p className={styles.kvLabel} style={{ marginBottom: 14 }}>
+        Y-axis: {yAxisLabel}
+      </p>
+
+      <div className={styles.chipRow} style={{ marginBottom: 12 }}>
+        {series.map((item) => (
+          <span key={item.label} className={styles.chip}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                background: item.stroke,
+                marginRight: 8,
+                verticalAlign: "middle",
+              }}
+            />
+            {item.label}
+          </span>
+        ))}
+      </div>
+
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height="100%"
+        role="img"
+        aria-label={title}
+        className={styles.analyticsChartSvg}
+      >
+        {Array.from({ length: ticks + 1 }).map((_, index) => {
+          const value = (maxValue / ticks) * index;
+          const y = yFor(value);
+          return (
+            <g key={index}>
+              <line
+                x1={margin.left}
+                y1={y}
+                x2={width - margin.right}
+                y2={y}
+                stroke="rgba(148, 163, 184, 0.18)"
+                strokeWidth="1"
+              />
+              <text
+                x={margin.left - 12}
+                y={y + 4}
+                textAnchor="end"
+                style={{ fill: "#9fb3d9", fontSize: 11, fontWeight: 600 }}
+              >
+                {Math.round(value)}
+              </text>
+            </g>
+          );
+        })}
+
+        {labels.map((label, index) => (
+          <text
+            key={label}
+            x={xFor(index)}
+            y={height - 18}
+            textAnchor="middle"
+            style={{ fill: "#dbe7ff", fontSize: 11, fontWeight: 700 }}
+          >
+            {label}
+          </text>
+        ))}
+
+        {series.map((item) => (
+          <g key={item.label}>
+            <path
+              d={pathFor(item.values)}
+              fill="none"
+              stroke={item.stroke}
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {item.values.map((value, index) => (
+              <circle
+                key={`${item.label}-${index}`}
+                cx={xFor(index)}
+                cy={yFor(value)}
+                r="3.5"
+                fill={item.stroke}
+              />
+            ))}
+          </g>
+        ))}
+      </svg>
+    </article>
+  );
+}
+
 function InboxPanel({
   title,
   subtitle,
@@ -353,6 +494,44 @@ function InboxPanel({
       )}
     </article>
   );
+}
+
+function buildTimeBuckets(complaints: ComplaintRow[]) {
+  const timestamps = complaints.map((item) => new Date(item.created_at).getTime());
+  const minTs = Math.min(...timestamps);
+  const maxTs = Math.max(...timestamps);
+  const spanDays = Math.max(1, Math.ceil((maxTs - minTs) / (1000 * 60 * 60 * 24)));
+
+  const useWeekly = spanDays > 18;
+  const formatter = new Intl.DateTimeFormat("en-BD", {
+    month: "short",
+    day: "numeric",
+    timeZone: "Asia/Dhaka",
+  });
+
+  const getBucket = (value: string) => {
+    const date = new Date(value);
+    const dayStart = new Date(date);
+    dayStart.setUTCHours(0, 0, 0, 0);
+
+    if (!useWeekly) {
+      return dayStart.toISOString().slice(0, 10);
+    }
+
+    const day = dayStart.getUTCDay();
+    const diff = (day + 6) % 7;
+    dayStart.setUTCDate(dayStart.getUTCDate() - diff);
+    return dayStart.toISOString().slice(0, 10);
+  };
+
+  const sortedKeys = Array.from(new Set(complaints.map((item) => getBucket(item.created_at)))).sort();
+
+  const labels = sortedKeys.map((key) => {
+    const date = new Date(`${key}T00:00:00Z`);
+    return useWeekly ? `Week of ${formatter.format(date)}` : formatter.format(date);
+  });
+
+  return { keys: sortedKeys, labels, getBucket, useWeekly };
 }
 
 export default async function AuthorityPage() {
@@ -473,10 +652,11 @@ export default async function AuthorityPage() {
   const completedCount = complaints.filter((item) => item.status === "completed").length;
   const rejectedCount = complaints.filter((item) => item.status === "rejected").length;
   const resolvedCount = resolvedOnlyCount + completedCount;
+  const openQueueCount = submittedCount + processingCount;
 
   const manualReviewCount = complaints.filter((item) => {
     const ai = inferenceByComplaint.get(item.id);
-    return ai?.model_versions?.manual_review_required === "true";
+    return parseBoolean(ai?.model_versions?.manual_review_required);
   }).length;
 
   const reliableCount = complaints.filter((item) => {
@@ -486,13 +666,8 @@ export default async function AuthorityPage() {
 
   const conflictCount = complaints.filter((item) => {
     const ai = inferenceByComplaint.get(item.id);
-    const citizenAiConflict = ai?.model_versions?.citizen_ai_conflict === "true";
+    const citizenAiConflict = parseBoolean(ai?.model_versions?.citizen_ai_conflict);
     return !!ai?.conflict_flag || citizenAiConflict;
-  }).length;
-
-  const priorityComputedCount = complaints.filter((item) => {
-    const ai = inferenceByComplaint.get(item.id);
-    return ai?.model_versions?.priority_status === "computed";
   }).length;
 
   const categoryCounts = new Map<string, number>();
@@ -511,20 +686,60 @@ export default async function AuthorityPage() {
     areaCounts.set(area, (areaCounts.get(area) ?? 0) + 1);
   }
 
-  const topCategories = countMapToSortedList(categoryCounts, totalComplaints, 5);
+  const topCategories = countMapToSortedList(categoryCounts, totalComplaints, 4);
   const topAreas = countMapToSortedList(areaCounts, totalComplaints, 5);
 
   const statusChartItems: RankedItem[] = [
     { label: "submitted", count: submittedCount, share: 0 },
     { label: "processing", count: processingCount, share: 0 },
-    { label: "resolved", count: resolvedCount, share: 0 },
+    { label: "resolved / completed", count: resolvedCount, share: 0 },
     { label: "rejected", count: rejectedCount, share: 0 },
   ].filter((item) => item.count > 0);
+
+  const { keys: bucketKeys, labels: bucketLabels, getBucket } = buildTimeBuckets(complaints);
+  const bucketIndex = new Map(bucketKeys.map((key, index) => [key, index]));
+
+  const statusSeriesMap = {
+    submitted: Array(bucketKeys.length).fill(0) as number[],
+    processing: Array(bucketKeys.length).fill(0) as number[],
+    resolved: Array(bucketKeys.length).fill(0) as number[],
+    rejected: Array(bucketKeys.length).fill(0) as number[],
+  };
+
+  const aiSeriesMap = {
+    reliable: Array(bucketKeys.length).fill(0) as number[],
+    manualReview: Array(bucketKeys.length).fill(0) as number[],
+    conflict: Array(bucketKeys.length).fill(0) as number[],
+  };
+
+  for (const complaint of complaints) {
+    const bucketKey = getBucket(complaint.created_at);
+    const idx = bucketIndex.get(bucketKey);
+    if (idx == null) continue;
+
+    if (complaint.status === "submitted") statusSeriesMap.submitted[idx] += 1;
+    if (complaint.status === "processing") statusSeriesMap.processing[idx] += 1;
+    if (complaint.status === "resolved" || complaint.status === "completed") {
+      statusSeriesMap.resolved[idx] += 1;
+    }
+    if (complaint.status === "rejected") statusSeriesMap.rejected[idx] += 1;
+
+    const ai = inferenceByComplaint.get(complaint.id);
+    const reliability = ai?.model_versions?.reliability_status ?? null;
+    const manualReviewRequired = parseBoolean(ai?.model_versions?.manual_review_required);
+    const citizenAiConflict = parseBoolean(ai?.model_versions?.citizen_ai_conflict);
+
+    if (reliability === "reliable") aiSeriesMap.reliable[idx] += 1;
+    if (manualReviewRequired || reliability === "manual_review_needed") {
+      aiSeriesMap.manualReview[idx] += 1;
+    }
+    if (!!ai?.conflict_flag || citizenAiConflict) aiSeriesMap.conflict[idx] += 1;
+  }
 
   const manualReviewComplaints = complaints
     .filter((complaint) => {
       const ai = inferenceByComplaint.get(complaint.id);
-      return ai?.model_versions?.manual_review_required === "true";
+      return parseBoolean(ai?.model_versions?.manual_review_required);
     })
     .slice(0, 3);
 
@@ -535,12 +750,7 @@ export default async function AuthorityPage() {
       const escalation =
         ai?.model_versions?.escalation_status || ai?.model_versions?.escalation || null;
 
-      return {
-        complaint,
-        ai,
-        rank,
-        escalation,
-      };
+      return { complaint, ai, rank, escalation };
     })
     .filter((item) => item.rank != null)
     .sort((a, b) => (a.rank! - b.rank!))
@@ -571,6 +781,9 @@ export default async function AuthorityPage() {
                 <Link href="/authority/complaints" className={styles.sidebarLink}>
                   Manage complaints
                 </Link>
+                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                  View Hotspots 
+                </Link>
                 <Link href="/authority/analytics" className={styles.sidebarLink}>
                   Open analytics
                 </Link>
@@ -583,34 +796,34 @@ export default async function AuthorityPage() {
               <p className={styles.eyebrow}>Authority review workspace</p>
               <h1 className={styles.title}>Complaint operations dashboard</h1>
               <p className={styles.subtitle}>
-                A cleaner dashboard for daily monitoring, manual review, and quick
-                movement into complaint detail pages.
+                A clearer dashboard for daily monitoring, quick filtering, and fast
+                movement into detailed review pages.
               </p>
 
               <div className={styles.statStrip}>
                 <MetricCard
                   label="Total complaints"
                   value={totalComplaints}
-                  text="Complaint records currently visible in the dashboard."
+                  text="All complaints currently visible to the authority dashboard."
                   href={buildComplaintsHref({})}
                 />
                 <MetricCard
-                  label="Submitted"
-                  value={submittedCount}
-                  text="New complaints waiting in the authority queue."
-                  href={buildComplaintsHref({ status: "submitted" })}
-                />
-                <MetricCard
-                  label="Reliable AI"
-                  value={reliableCount}
-                  text="Cases where AI can be used as a strong starting point."
-                  href={buildComplaintsHref({ review: "reliable" })}
+                  label="Open queue"
+                  value={openQueueCount}
+                  text="Submitted and processing complaints still waiting for closure."
+                  href={buildComplaintsHref({ status: "open" })}
                 />
                 <MetricCard
                   label="Manual review"
                   value={manualReviewCount}
                   text="Cases that should be checked carefully before action."
                   href={buildComplaintsHref({ review: "manual_review" })}
+                />
+                <MetricCard
+                  label="Conflict cases"
+                  value={conflictCount}
+                  text="Cases where complaint signals do not align cleanly."
+                  href={buildComplaintsHref({ review: "conflict" })}
                 />
               </div>
             </section>
@@ -620,7 +833,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Operations overview</h2>
                   <p className={styles.sectionText}>
-                    A quick command-center view of complaint status and top complaint categories.
+                    Quick summaries for complaint status and the most common categories.
                   </p>
                 </div>
 
@@ -637,41 +850,103 @@ export default async function AuthorityPage() {
               <div className={styles.analyticsChartGrid}>
                 <BarChart
                   title="Complaint status distribution"
+                  subtitle="Current complaint counts by workflow stage."
                   items={statusChartItems}
                   fillClass={styles.analyticsChartFillTeal}
                 />
 
                 <BarChart
                   title="Top complaint categories"
+                  subtitle="Final category when available, otherwise the best available complaint category."
                   items={topCategories}
                   fillClass={styles.analyticsChartFillBlue}
                 />
               </div>
 
+              <div className={styles.analyticsChartGrid} style={{ marginTop: 18 }}>
+                <LineChart
+                  title="Complaint activity over time"
+                  subtitle="Complaints grouped by submission time bucket and shown by current status."
+                  yAxisLabel="Number of complaints"
+                  labels={bucketLabels}
+                  series={[
+                    { label: "Submitted", values: statusSeriesMap.submitted, stroke: "#FFB020" },
+                    { label: "Processing", values: statusSeriesMap.processing, stroke: "#22C55E" },
+                    { label: "Resolved / completed", values: statusSeriesMap.resolved, stroke: "#60A5FA" },
+                    { label: "Rejected", values: statusSeriesMap.rejected, stroke: "#FF4D6D" },
+                  ]}
+                />
+
+                <LineChart
+                  title="AI review trend over time"
+                  subtitle="Cases grouped by submission time bucket and shown by review outcome type."
+                  yAxisLabel="Number of complaints"
+                  labels={bucketLabels}
+                  series={[
+                    { label: "Reliable AI", values: aiSeriesMap.reliable, stroke: "#19D3D1" },
+                    { label: "Manual review needed", values: aiSeriesMap.manualReview, stroke: "#FF7A1A" },
+                    { label: "Conflict cases", values: aiSeriesMap.conflict, stroke: "#FF4D4F" },
+                  ]}
+                />
+              </div>
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Quick drill-downs</h2>
+                  <p className={styles.sectionText}>
+                    Click a card below to open the complaint management page with that filter already applied.
+                  </p>
+                </div>
+              </div>
+
               <div className={styles.statStrip}>
                 <MetricCard
-                  label="Resolved"
+                  label="Submitted"
+                  value={submittedCount}
+                  text="New complaints waiting for initial authority action."
+                  href={buildComplaintsHref({ status: "submitted" })}
+                />
+                <MetricCard
+                  label="Processing"
+                  value={processingCount}
+                  text="Complaints already under active authority handling."
+                  href={buildComplaintsHref({ status: "processing" })}
+                />
+                <MetricCard
+                  label="Resolved / closed"
                   value={resolvedCount}
-                  text="Complaints already closed by authority action."
-                  href={buildComplaintsHref({ status: "resolved" })}
-                />
-                <MetricCard
-                  label="Conflict cases"
-                  value={conflictCount}
-                  text="Complaints where AI and complaint signals do not align cleanly."
-                  href={buildComplaintsHref({ review: "conflict" })}
-                />
-                <MetricCard
-                  label="Priority scored"
-                  value={priorityComputedCount}
-                  text="Complaints with computed queue position."
+                  text="Complaints already completed or resolved."
+                  href={buildComplaintsHref({ status: "resolved_all" })}
                 />
                 <MetricCard
                   label="Rejected"
                   value={rejectedCount}
-                  text="Complaints rejected after review."
+                  text="Complaints closed after authority rejection."
                   href={buildComplaintsHref({ status: "rejected" })}
                 />
+              </div>
+
+              <div className={styles.sectionHeader} style={{ marginTop: 18 }}>
+                <div>
+                  <h3 className={styles.sectionTitle}>Category filters</h3>
+                  <p className={styles.sectionText}>
+                    Open the complaints page directly with one of the main complaint categories selected.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.statStrip}>
+                {topCategories.map((item) => (
+                  <MetricCard
+                    key={item.label}
+                    label={niceLabel(item.label)}
+                    value={item.count}
+                    text={`${item.share.toFixed(1)}% of total complaints in this category.`}
+                    href={buildComplaintsHref({ category: item.label })}
+                  />
+                ))}
               </div>
             </section>
 
@@ -680,7 +955,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Priority inbox</h2>
                   <p className={styles.sectionText}>
-                    Compact previews for cases that need faster authority attention.
+                    Compact previews for the cases that most likely need faster authority attention.
                   </p>
                 </div>
               </div>
@@ -688,7 +963,7 @@ export default async function AuthorityPage() {
               <div className={styles.dashboardInboxGrid}>
                 <InboxPanel
                   title="Manual review"
-                  subtitle="Complaints where authority should verify the AI suggestion before acting."
+                  subtitle="Complaints where authority should verify the AI output before taking action."
                   emptyText="No manual-review complaints right now."
                   badgeClass={styles.chipWarn}
                   items={manualReviewComplaints.map((complaint) => {
@@ -725,7 +1000,7 @@ export default async function AuthorityPage() {
                     <div>
                       <h3 className={styles.dashboardInboxTitle}>Area hotspots</h3>
                       <p className={styles.dashboardInboxText}>
-                        Most affected areas based on the latest complaint distribution.
+                        Areas with the highest complaint concentration in the current dashboard view.
                       </p>
                     </div>
                   </div>
@@ -758,18 +1033,19 @@ export default async function AuthorityPage() {
             <section className={styles.section}>
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Recent complaints</h2>
+                  <h2 className={styles.sectionTitle}>Quick complaint review list</h2>
                   <p className={styles.sectionText}>
-                    Recent complaint previews with only the values authorities actually need.
+                    A short list of recent complaints with only the key facts needed before opening the full review page.
                   </p>
-                  <div className={styles.complaintsFilterActions}>
-                    <Link href="/authority/complaints" className={styles.primaryLink}>
-                      Manage complaints
-                    </Link>
-                    <Link href="/authority/analytics" className={styles.secondaryLink}>
-                      Open analytics
-                    </Link>
-                  </div>
+                </div>
+
+                <div className={styles.complaintsFilterActions}>
+                  <Link href="/authority/complaints" className={styles.primaryLink}>
+                    Manage complaints
+                  </Link>
+                  <Link href="/authority/analytics" className={styles.secondaryLink}>
+                    Open analytics
+                  </Link>
                 </div>
               </div>
 
@@ -781,11 +1057,31 @@ export default async function AuthorityPage() {
                     const ai = inferenceByComplaint.get(complaint.id);
                     const media = mediaByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
-                    const citizenAiConflict =
-                      ai?.model_versions?.citizen_ai_conflict === "true";
+                    const manualReviewRequired = parseBoolean(
+                      ai?.model_versions?.manual_review_required
+                    );
                     const priorityRank = parseNumber(ai?.model_versions?.priority_rank);
-                    const escalation =
-                      ai?.model_versions?.escalation_status || ai?.model_versions?.escalation || null;
+                    const urgencyScore = parseNumber(ai?.model_versions?.urgency_score);
+                    const urgencyPercent =
+                      urgencyScore != null ? Math.round(urgencyScore * 100) : null;
+
+                    const finalCategory =
+                      complaint.final_category ||
+                      ai?.fusion_label ||
+                      complaint.user_category ||
+                      "Not available";
+
+                    const reviewChipLabel =
+                      manualReviewRequired || reliability === "manual_review_needed"
+                        ? "Manual review needed"
+                        : reliability === "reliable"
+                        ? "Reliable"
+                        : reliabilityLabel(reliability);
+
+                    const reviewChipClass =
+                      manualReviewRequired || reliability === "manual_review_needed"
+                        ? styles.chipWarn
+                        : reliabilityClass(reliability);
 
                     return (
                       <article key={complaint.id} className={styles.dashboardQueueRow}>
@@ -807,32 +1103,19 @@ export default async function AuthorityPage() {
                           </div>
 
                           <p className={styles.dashboardQueueMeta}>
-                            Reporter: {complaint.reporter_name || "Unknown"} • Area:{" "}
-                            {getAreaName(complaint)} • Submitted: {formatDate(complaint.created_at)}
+                            Submitted {formatDate(complaint.created_at)} • Area: {getAreaName(complaint)} • Reporter:{" "}
+                            {complaint.reporter_name || "Unknown"}
                           </p>
-
-                          <p className={styles.dashboardQueueSubMeta}>
-                            AI confidence {confidenceLabel(ai?.fusion_confidence)} •{" "}
-                            {priorityRank != null ? `Queue ${ordinal(priorityRank)}` : "Queue not computed"} •{" "}
-                            {friendlyEscalation(escalation)}
-                          </p>
-
-                          {ai?.summary ? (
-                            <p className={styles.dashboardQueueSubMeta}>
-                              {shortenText(ai.summary, 150)}
-                            </p>
-                          ) : null}
 
                           <div className={styles.chipRow}>
+                            <span className={styles.chip}>Final: {finalCategory}</span>
+                            <span className={reviewChipClass}>{reviewChipLabel}</span>
                             <span className={styles.chip}>
-                              AI: {ai?.fusion_label || "Not available"}
+                              {priorityRank != null ? `Queue ${ordinal(priorityRank)}` : "Queue N/A"}
                             </span>
-                            <span className={reliabilityClass(reliability)}>
-                              {reliabilityLabel(reliability)}
+                            <span className={styles.chip}>
+                              {urgencyPercent != null ? `Urgency ${urgencyPercent}%` : "Urgency N/A"}
                             </span>
-                            {citizenAiConflict ? (
-                              <span className={styles.chipWarn}>Citizen/AI mismatch</span>
-                            ) : null}
                           </div>
                         </div>
 

@@ -230,8 +230,8 @@ export default async function AuthorityComplaintsPage({
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -447,6 +447,9 @@ export default async function AuthorityComplaintsPage({
                 </Link>
                 <Link href="/authority/complaints" className={styles.sidebarLinkActive}>
                   All complaints
+                </Link>
+                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                  View Hotspots
                 </Link>
                 <Link href="/authority/analytics" className={styles.sidebarLink}>
                   Open analytics
