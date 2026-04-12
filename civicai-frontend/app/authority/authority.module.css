@@ -2026,3 +2026,79 @@
   color: var(--text-muted, #6b7280);
   white-space: nowrap;
 }
+
+.helperText {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 15px;
+  color: #d9e7ff;
+}
+
+.emailPreviewBox {
+  white-space: pre-line;
+}
+
+.duplicateMetaRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.duplicateItem {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 0.85rem 0;
+}
+
+.duplicateLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.2s, transform 0.18s ease;
+  padding: 0.4rem 0.2rem;
+}
+
+.duplicateLink:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding-left: 0.65rem;
+  padding-right: 0.65rem;
+  transform: translateY(-1px);
+}
+
+.duplicateTitle {
+  flex: 1;
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1.5;
+}
+
+.duplicateDate {
+  font-size: 0.8rem;
+  color: #9fb0c9;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .duplicateLink {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .duplicateMetaRow {
+    justify-content: flex-start;
+  }
+}

@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import AuthorityActionPanel from "./AuthorityActionPanel";
 import AuthorityImageLightbox from "./AuthorityImageLightbox";
+import DuplicateComplaintsPanel from "./DuplicateComplaintsPanel";
 import styles from "../authority.module.css";
 
 type ComplaintDetail = {
@@ -101,6 +102,72 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function parseStringArray(value: unknown): string[] {
+  if (value == null) return [];
+
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item).trim()).filter(Boolean)
+      : [];
+  } catch {
+    return value.trim() ? [value.trim()] : [];
+  }
+}
+
+function humanizeValue(value?: string | null) {
+  if (!value) return "Not available";
+
+  const trimmed = value.trim();
+  if (!trimmed) return "Not available";
+
+  const normalized = trimmed
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const specialMap: Record<string, string> = {
+    ai: "AI",
+    submitted: "Submitted",
+    processing: "Processing",
+    completed: "Completed",
+    resolved: "Resolved",
+    rejected: "Rejected",
+    reliable: "Reliable",
+    manual_review_needed: "Manual review needed",
+    insufficient_evidence: "Insufficient evidence",
+    not_computed: "Not computed",
+    not_in_queue: "Not in queue",
+    computed: "Computed",
+    road_damage: "Road damage",
+    iwwm: "IWWM",
+  };
+
+  const lower = trimmed.toLowerCase();
+  if (specialMap[lower]) return specialMap[lower];
+
+  return normalized.replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function humanizeCategorySource(value?: string | null) {
+  switch ((value || "").toLowerCase()) {
+    case "ai":
+      return "AI";
+    case "authority":
+      return "Authority";
+    case "citizen":
+      return "Citizen";
+    default:
+      return humanizeValue(value);
+  }
+}
+
 function statusClass(status: string) {
   switch (status) {
     case "submitted":
@@ -190,7 +257,7 @@ function visualEvidenceText(
   confidences?: number[] | null
 ) {
   if (!labels || labels.length === 0) return "No clear visual evidence detected.";
-  const label = labels[0];
+  const label = humanizeValue(labels[0]);
   const conf = confidences?.[0];
   if (conf == null) return label;
   return `${label} (${nicePercent(conf)})`;
@@ -316,71 +383,38 @@ export default async function AuthorityComplaintDetailPage({
       .filter(Boolean)
       .join(", ") || "Not provided";
 
-  const { data: mediaRows } = await supabase
-    .from("complaint_media")
-    .select("complaint_id, public_url, original_filename, created_at")
-    .eq("complaint_id", id)
-    .eq("media_type", "image")
-    .order("created_at", { ascending: true })
-    .limit(1);
-
-  const { data: inferenceRow } = await supabase
-    .from("inference_results")
-    .select(`
-      complaint_id,
-      text_label,
-      text_confidence,
-      image_labels,
-      image_confidences,
-      image_boxes,
-      fusion_label,
-      fusion_confidence,
-      conflict_flag,
-      priority,
-      priority_score,
-      summary,
-      model_versions,
-      detected_image_url,
-      detected_image_path,
-      created_at,
-      updated_at
-    `)
-    .eq("complaint_id", id)
-    .maybeSingle();
-
-  let duplicateIds: string[] = [];
-  let duplicateComplaints: Array<{
-    id: string;
-    title: string | null;
-    status: string;
-    created_at: string;
-  }> = [];
-
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000";
-
-  try {
-    const dupRes = await fetch(`${apiBaseUrl}/complaints/${id}/duplicates`, {
-      cache: "no-store",
-    });
-
-    if (dupRes.ok) {
-      const dupData = await dupRes.json();
-      duplicateIds = Array.isArray(dupData?.duplicates) ? dupData.duplicates : [];
-
-      if (duplicateIds.length > 0) {
-        const { data: dupRows } = await supabase
-          .from("complaints")
-          .select("id, title, status, created_at")
-          .in("id", duplicateIds)
-          .order("created_at", { ascending: false });
-
-        duplicateComplaints = dupRows || [];
-      }
-    }
-  } catch (e) {
-    console.warn("Failed to fetch duplicates", e);
-  }
+  const [{ data: mediaRows }, { data: inferenceRow }] = await Promise.all([
+    supabase
+      .from("complaint_media")
+      .select("complaint_id, public_url, original_filename, created_at")
+      .eq("complaint_id", id)
+      .eq("media_type", "image")
+      .order("created_at", { ascending: true })
+      .limit(1),
+    supabase
+      .from("inference_results")
+      .select(`
+        complaint_id,
+        text_label,
+        text_confidence,
+        image_labels,
+        image_confidences,
+        image_boxes,
+        fusion_label,
+        fusion_confidence,
+        conflict_flag,
+        priority,
+        priority_score,
+        summary,
+        model_versions,
+        detected_image_url,
+        detected_image_path,
+        created_at,
+        updated_at
+      `)
+      .eq("complaint_id", id)
+      .maybeSingle(),
+  ]);
 
   const media = ((mediaRows ?? [])[0] ?? null) as ComplaintMediaRow | null;
   const ai = (inferenceRow ?? null) as InferenceRow | null;
@@ -426,7 +460,8 @@ export default async function AuthorityComplaintDetailPage({
   const urgencyPercent =
     urgencyScoreRaw != null ? Math.round(urgencyScoreRaw * 100) : null;
 
-  const duplicateCount = duplicateComplaints.length;
+  const savedDuplicateIds = parseStringArray(modelVersions?.duplicate_ids);
+  const duplicateCount = savedDuplicateIds.length;
   const finalOperationalCategory =
     complaint.final_category || ai?.fusion_label || complaint.user_category || "Not set";
 
@@ -453,7 +488,7 @@ export default async function AuthorityComplaintDetailPage({
       ? priorityRank != null
         ? `This complaint is currently ranked ${ordinal(
             priorityRank
-          )} among open complaints waiting for attention.`
+          )} among submitted complaints waiting for first authority review.`
         : "Priority was computed for this complaint."
       : priorityReason || "Priority could not be computed.";
 
@@ -510,7 +545,7 @@ export default async function AuthorityComplaintDetailPage({
 
                 <div className={styles.detailActions}>
                   <span className={statusClass(complaint.status)}>
-                    {complaint.status}
+                    {humanizeValue(complaint.status)}
                   </span>
                   <Link href="/authority" className={styles.secondaryLink}>
                     Back to dashboard
@@ -527,7 +562,7 @@ export default async function AuthorityComplaintDetailPage({
                   <div className={styles.panelBody}>
                     <div className={styles.highlightBox}>
                       <p className={styles.kvLabel}>Current working category</p>
-                      <p className={styles.kvValue}>{finalOperationalCategory}</p>
+                      <p className={styles.kvValue}>{humanizeValue(finalOperationalCategory)}</p>
                     </div>
 
                     <div className={styles.aiStatGrid}>
@@ -625,26 +660,26 @@ export default async function AuthorityComplaintDetailPage({
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Citizen selected category</p>
                         <p className={styles.kvValue}>
-                          {complaint.user_category || "Not provided"}
+                          {humanizeValue(complaint.user_category) || "Not provided"}
                         </p>
                       </div>
 
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>AI suggested category</p>
-                        <p className={styles.kvValue}>{ai?.fusion_label || "N/A"}</p>
+                        <p className={styles.kvValue}>{humanizeValue(ai?.fusion_label)}</p>
                       </div>
 
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Final operational category</p>
                         <p className={styles.kvValue}>
-                          {complaint.final_category || "Not set"}
+                          {humanizeValue(complaint.final_category)}
                         </p>
                       </div>
 
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Category source</p>
                         <p className={styles.kvValue}>
-                          {complaint.category_source || "Not set"}
+                          {humanizeCategorySource(complaint.category_source)}
                         </p>
                       </div>
                     </div>
@@ -737,7 +772,7 @@ export default async function AuthorityComplaintDetailPage({
                     <div className={styles.aiStatGrid}>
                       <div className={styles.aiStatCard}>
                         <p className={styles.aiStatLabel}>Suggested category</p>
-                        <p className={styles.aiStatValue}>{ai?.fusion_label || "N/A"}</p>
+                        <p className={styles.aiStatValue}>{humanizeValue(ai?.fusion_label)}</p>
                       </div>
 
                       <div className={styles.aiStatCard}>
@@ -753,7 +788,7 @@ export default async function AuthorityComplaintDetailPage({
                       </div>
 
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Duplicate matches</p>
+                        <p className={styles.aiStatLabel}>Saved duplicate matches</p>
                         <p className={styles.aiStatValue}>{duplicateCount}</p>
                       </div>
                     </div>
@@ -803,7 +838,7 @@ export default async function AuthorityComplaintDetailPage({
                       <div className={styles.aiStatCard}>
                         <p className={styles.aiStatLabel}>Priority state</p>
                         <p className={styles.aiStatValue}>
-                          {priorityStatus || "Not available"}
+                          {humanizeValue(priorityStatus)}
                         </p>
                       </div>
                     </div>
@@ -827,25 +862,7 @@ export default async function AuthorityComplaintDetailPage({
                   </h2>
 
                   <div className={styles.panelBody}>
-                    {duplicateComplaints.length === 0 ? (
-                      <p className={styles.kvValue}>No similar complaints found nearby.</p>
-                    ) : (
-                      <ul className={styles.duplicateList}>
-                        {duplicateComplaints.map((dup) => (
-                          <li key={dup.id} className={styles.duplicateItem}>
-                            <Link href={`/authority/${dup.id}`} className={styles.duplicateLink}>
-                              <span className={styles.duplicateTitle}>
-                                {dup.title || "Untitled complaint"}
-                              </span>
-                              <span className={statusClass(dup.status)}>{dup.status}</span>
-                              <span className={styles.duplicateDate}>
-                                {formatDate(dup.created_at)}
-                              </span>
-                            </Link>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                    <DuplicateComplaintsPanel complaintId={complaint.id} />
                   </div>
                 </article>
               </section>

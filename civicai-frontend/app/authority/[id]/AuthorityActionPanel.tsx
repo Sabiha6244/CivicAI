@@ -57,61 +57,45 @@ function toStatusTitle(status: string) {
   }
 }
 
+function toReliabilityTitle(value?: string | null) {
+  switch (value) {
+    case "reliable":
+      return "Reliable";
+    case "manual_review_needed":
+      return "Manual review needed";
+    case "insufficient_evidence":
+      return "Insufficient evidence";
+    default:
+      return "Not available";
+  }
+}
+
 function defaultEmailMessage(status: string, category: string, note: string, title: string, areaText: string) {
   const safeCategory = category || "under authority review";
   const safeNote = note.trim();
 
   switch (status) {
     case "processing":
-      return `Hello,
-
-Your complaint "${title}" for ${areaText} is now under authority processing.
-
-Current working category: ${safeCategory}
-
-${safeNote ? `Authority note: ${safeNote}` : "The authority team has started reviewing the issue and will update you again after field verification."}
-
-Regards,
-CivicAI Authority Team`;
+      return `Hello,\n\nYour complaint "${title}" for ${areaText} is now under authority processing.\n\nCurrent working category: ${safeCategory}\n\n${safeNote ? `Authority note: ${safeNote}` : "The authority team has started reviewing the issue and will update you again after field verification."}\n\nRegards,\nCivicAI Authority Team`;
 
     case "resolved":
     case "completed":
-      return `Hello,
-
-Your complaint "${title}" for ${areaText} has been marked as ${toStatusTitle(status).toLowerCase()}.
-
-Final category: ${safeCategory}
-
-${safeNote ? `Resolution update: ${safeNote}` : "The authority has closed this complaint after review."}
-
-Regards,
-CivicAI Authority Team`;
+      return `Hello,\n\nYour complaint "${title}" for ${areaText} has been marked as ${toStatusTitle(status).toLowerCase()}.\n\nFinal category: ${safeCategory}\n\n${safeNote ? `Resolution update: ${safeNote}` : "The authority has closed this complaint after review."}\n\nRegards,\nCivicAI Authority Team`;
 
     case "rejected":
-      return `Hello,
-
-Your complaint "${title}" for ${areaText} has been marked as rejected after authority review.
-
-Final category: ${safeCategory}
-
-${safeNote ? `Review note: ${safeNote}` : "The complaint could not be accepted in its current form."}
-
-Regards,
-CivicAI Authority Team`;
+      return `Hello,\n\nYour complaint "${title}" for ${areaText} has been marked as rejected after authority review.\n\nFinal category: ${safeCategory}\n\n${safeNote ? `Review note: ${safeNote}` : "The complaint could not be accepted in its current form."}\n\nRegards,\nCivicAI Authority Team`;
 
     default:
-      return `Hello,
-
-Your complaint "${title}" for ${areaText} has received an authority status update.
-
-Current status: ${toStatusTitle(status)}
-Current category: ${safeCategory}
-
-${safeNote ? `Authority note: ${safeNote}` : "Please check the latest complaint status in the platform."}
-
-Regards,
-CivicAI Authority Team`;
+      return `Hello,\n\nYour complaint "${title}" for ${areaText} has received an authority status update.\n\nCurrent status: ${toStatusTitle(status)}\nCurrent category: ${safeCategory}\n\n${safeNote ? `Authority note: ${safeNote}` : "Please check the latest complaint status in the platform."}\n\nRegards,\nCivicAI Authority Team`;
   }
+}
+
+function normalizeUiError(error: unknown) {
+  if (!(error instanceof Error)) return "Request failed.";
+  if (/fetch failed/i.test(error.message)) {
+    return "Request failed while contacting the server. Check that both frontend and backend are running, then try again.";
+  }
+  return error.message;
 }
 
 export default function AuthorityActionPanel({
@@ -204,7 +188,7 @@ export default function AuthorityActionPanel({
       router.refresh();
     } catch (error) {
       setMsgType("error");
-      setMsg(error instanceof Error ? error.message : "Failed to update complaint.");
+      setMsg(normalizeUiError(error));
     } finally {
       setSaving(false);
     }
@@ -226,11 +210,11 @@ export default function AuthorityActionPanel({
       }
 
       setMsgType("info");
-      setMsg("AI processing completed successfully. Review the updated AI assessment before taking action.");
+      setMsg("AI processing completed successfully. The page will now refresh with the latest assessment.");
       router.refresh();
     } catch (error) {
       setMsgType("error");
-      setMsg(error instanceof Error ? error.message : "Failed to run AI.");
+      setMsg(normalizeUiError(error));
     } finally {
       setRunningAi(false);
     }
@@ -305,7 +289,7 @@ export default function AuthorityActionPanel({
         <div className={styles.infoBox}>
           <p className={styles.kvLabel}>Current decision summary</p>
           <p className={styles.kvValue}>
-            Working category: {effectiveCategory}. Reliability: {reliabilityStatus || "not available"}.
+            Working category: {effectiveCategory}. Reliability: {toReliabilityTitle(reliabilityStatus)}.
             {manualReviewRequired ? " Manual review is currently recommended." : " Manual review is not currently required."}
           </p>
         </div>
@@ -324,20 +308,10 @@ export default function AuthorityActionPanel({
         <div className={styles.noteBox}>
           <p className={styles.kvLabel}>Reporter notification</p>
           <p className={styles.kvValue}>
-            Prepare an automatic status-update email for {reporterName}. The backend route must
-            support the email payload for actual delivery.
+            Prepare an automatic status-update email for {reporterName}. The backend route will send it when this option stays enabled.
           </p>
 
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              marginTop: 12,
-              fontSize: 15,
-              color: "#d9e7ff",
-            }}
-          >
+          <label className={styles.checkboxRow}>
             <input
               type="checkbox"
               checked={notifyReporter}
@@ -355,7 +329,7 @@ export default function AuthorityActionPanel({
 
         <div className={styles.noteBox}>
           <p className={styles.kvLabel}>Email preview</p>
-          <p className={styles.kvValue} style={{ whiteSpace: "pre-line" }}>
+          <p className={`${styles.kvValue} ${styles.emailPreviewBox}`}>
             {emailBody}
           </p>
         </div>

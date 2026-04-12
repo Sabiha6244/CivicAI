@@ -1,4 +1,3 @@
-
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
@@ -81,10 +80,20 @@ function nicePercent(value?: number | null) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function shortenText(value: string, max = 36) {
+  const clean = value.trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trimEnd()}…`;
+}
+
 function niceLabel(value: string) {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function chartLabel(value: string, max = 34) {
+  return shortenText(niceLabel(value), max);
 }
 
 function statusClass(status: string) {
@@ -268,7 +277,7 @@ function BarChart({
             return (
               <g key={item.label}>
                 <text x="16" y={y} className={styles.analyticsChartLabel}>
-                  {niceLabel(item.label)}
+                  {chartLabel(item.label)}
                 </text>
 
                 <rect
@@ -324,10 +333,7 @@ function LineChart({
   const margin = { top: 54, right: 26, bottom: 56, left: 56 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const maxValue = Math.max(
-    1,
-    ...series.flatMap((item) => item.values),
-  );
+  const maxValue = Math.max(1, ...series.flatMap((item) => item.values));
   const ticks = 4;
 
   const xFor = (index: number) => {
@@ -383,8 +389,8 @@ function LineChart({
         aria-label={title}
         className={styles.analyticsChartSvg}
       >
-        {Array.from({ length: ticks + 1 }).map((_, index) => {
-          const value = (maxValue / ticks) * index;
+        {Array.from({ length: 5 }).map((_, index) => {
+          const value = (maxValue / 4) * index;
           const y = yFor(value);
           return (
             <g key={index}>
@@ -458,6 +464,7 @@ function InboxPanel({
   items: Array<{
     id: string;
     title: string;
+    fullTitle?: string;
     meta: string;
     badge: string;
   }>;
@@ -482,6 +489,7 @@ function InboxPanel({
               key={item.id}
               href={`/authority/${item.id}`}
               className={styles.dashboardInboxItem}
+              title={item.fullTitle || item.title}
             >
               <div className={styles.dashboardInboxItemTop}>
                 <h4 className={styles.dashboardInboxItemTitle}>{item.title}</h4>
@@ -531,7 +539,7 @@ function buildTimeBuckets(complaints: ComplaintRow[]) {
     return useWeekly ? `Week of ${formatter.format(date)}` : formatter.format(date);
   });
 
-  return { keys: sortedKeys, labels, getBucket, useWeekly };
+  return { keys: sortedKeys, labels, getBucket };
 }
 
 export default async function AuthorityPage() {
@@ -645,6 +653,8 @@ export default async function AuthorityPage() {
     }
   }
 
+  const submittedComplaints = complaints.filter((item) => item.status === "submitted");
+
   const totalComplaints = complaints.length;
   const submittedCount = complaints.filter((item) => item.status === "submitted").length;
   const processingCount = complaints.filter((item) => item.status === "processing").length;
@@ -654,14 +664,9 @@ export default async function AuthorityPage() {
   const resolvedCount = resolvedOnlyCount + completedCount;
   const openQueueCount = submittedCount + processingCount;
 
-  const manualReviewCount = complaints.filter((item) => {
+  const activeManualReviewCount = submittedComplaints.filter((item) => {
     const ai = inferenceByComplaint.get(item.id);
     return parseBoolean(ai?.model_versions?.manual_review_required);
-  }).length;
-
-  const reliableCount = complaints.filter((item) => {
-    const ai = inferenceByComplaint.get(item.id);
-    return ai?.model_versions?.reliability_status === "reliable";
   }).length;
 
   const conflictCount = complaints.filter((item) => {
@@ -672,6 +677,7 @@ export default async function AuthorityPage() {
 
   const categoryCounts = new Map<string, number>();
   const areaCounts = new Map<string, number>();
+  const submittedAreaCounts = new Map<string, number>();
 
   for (const complaint of complaints) {
     const category =
@@ -686,8 +692,18 @@ export default async function AuthorityPage() {
     areaCounts.set(area, (areaCounts.get(area) ?? 0) + 1);
   }
 
+  for (const complaint of submittedComplaints) {
+    const area = getAreaName(complaint);
+    submittedAreaCounts.set(area, (submittedAreaCounts.get(area) ?? 0) + 1);
+  }
+
   const topCategories = countMapToSortedList(categoryCounts, totalComplaints, 4);
   const topAreas = countMapToSortedList(areaCounts, totalComplaints, 5);
+  const submittedTopAreas = countMapToSortedList(
+    submittedAreaCounts,
+    submittedComplaints.length,
+    5
+  );
 
   const statusChartItems: RankedItem[] = [
     { label: "submitted", count: submittedCount, share: 0 },
@@ -736,14 +752,14 @@ export default async function AuthorityPage() {
     if (!!ai?.conflict_flag || citizenAiConflict) aiSeriesMap.conflict[idx] += 1;
   }
 
-  const manualReviewComplaints = complaints
+  const manualReviewComplaints = submittedComplaints
     .filter((complaint) => {
       const ai = inferenceByComplaint.get(complaint.id);
       return parseBoolean(ai?.model_versions?.manual_review_required);
     })
     .slice(0, 3);
 
-  const queueComplaints = complaints
+  const queueComplaints = submittedComplaints
     .map((complaint) => {
       const ai = inferenceByComplaint.get(complaint.id);
       const rank = parseNumber(ai?.model_versions?.priority_rank);
@@ -756,7 +772,17 @@ export default async function AuthorityPage() {
     .sort((a, b) => (a.rank! - b.rank!))
     .slice(0, 3);
 
-  const recentComplaints = complaints.slice(0, 6);
+  const reviewQueueComplaints = submittedComplaints
+    .map((complaint) => {
+      const ai = inferenceByComplaint.get(complaint.id);
+      return { complaint, ai };
+    })
+    .sort((a, b) => {
+      const aRank = parseNumber(a.ai?.model_versions?.priority_rank) ?? Number.MAX_SAFE_INTEGER;
+      const bRank = parseNumber(b.ai?.model_versions?.priority_rank) ?? Number.MAX_SAFE_INTEGER;
+      return aRank - bRank;
+    })
+    .slice(0, 6);
 
   return (
     <main className={styles.page}>
@@ -768,7 +794,7 @@ export default async function AuthorityPage() {
               <h2 className={styles.sidebarTitle}>Dashboard</h2>
               <p className={styles.sidebarText}>
                 Review complaint submissions, inspect AI suggestions, and focus on
-                the cases that need authority attention first.
+                the cases that still need first authority attention.
               </p>
 
               <nav className={styles.sidebarNav}>
@@ -782,7 +808,7 @@ export default async function AuthorityPage() {
                   Manage complaints
                 </Link>
                 <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
-                  View Hotspots 
+                  View hotspots
                 </Link>
                 <Link href="/authority/analytics" className={styles.sidebarLink}>
                   Open analytics
@@ -796,8 +822,8 @@ export default async function AuthorityPage() {
               <p className={styles.eyebrow}>Authority review workspace</p>
               <h1 className={styles.title}>Complaint operations dashboard</h1>
               <p className={styles.subtitle}>
-                A clearer dashboard for daily monitoring, quick filtering, and fast
-                movement into detailed review pages.
+                A cleaner authority dashboard for first-review triage, daily
+                monitoring, and quick movement into detailed complaint handling.
               </p>
 
               <div className={styles.statStrip}>
@@ -814,10 +840,10 @@ export default async function AuthorityPage() {
                   href={buildComplaintsHref({ status: "open" })}
                 />
                 <MetricCard
-                  label="Manual review"
-                  value={manualReviewCount}
-                  text="Cases that should be checked carefully before action."
-                  href={buildComplaintsHref({ review: "manual_review" })}
+                  label="Active manual review"
+                  value={activeManualReviewCount}
+                  text="Submitted complaints that still need authority verification."
+                  href={buildComplaintsHref({ status: "submitted", review: "manual_review" })}
                 />
                 <MetricCard
                   label="Conflict cases"
@@ -833,7 +859,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Operations overview</h2>
                   <p className={styles.sectionText}>
-                    Quick summaries for complaint status and the most common categories.
+                    Quick summaries for complaint status, complaint categories, and current authority workload.
                   </p>
                 </div>
 
@@ -955,7 +981,8 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Priority inbox</h2>
                   <p className={styles.sectionText}>
-                    Compact previews for the cases that most likely need faster authority attention.
+                    This inbox shows only submitted complaints that still need first authority attention.
+                    Reviewed, processing, resolved, completed, and rejected complaints are intentionally excluded.
                   </p>
                 </div>
               </div>
@@ -963,15 +990,17 @@ export default async function AuthorityPage() {
               <div className={styles.dashboardInboxGrid}>
                 <InboxPanel
                   title="Manual review"
-                  subtitle="Complaints where authority should verify the AI output before taking action."
-                  emptyText="No manual-review complaints right now."
+                  subtitle="Submitted complaints where authority should verify the AI output before taking action."
+                  emptyText="No submitted complaints are waiting for manual review right now."
                   badgeClass={styles.chipWarn}
                   items={manualReviewComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
+                    const fullTitle = complaint.title || "Untitled complaint";
                     return {
                       id: complaint.id,
-                      title: complaint.title || "Untitled complaint",
+                      title: shortenText(fullTitle, 30),
+                      fullTitle,
                       meta: `${getAreaName(complaint)} • ${formatDate(
                         complaint.created_at
                       )} • ${reliabilityLabel(reliability)}`,
@@ -982,37 +1011,41 @@ export default async function AuthorityPage() {
 
                 <InboxPanel
                   title="Queue priority"
-                  subtitle="Complaints currently highest in the computed queue order."
-                  emptyText="No ranked complaints available right now."
+                  subtitle="Submitted complaints currently highest in the computed first-review queue order."
+                  emptyText="No submitted complaints with queue ranking are available right now."
                   badgeClass={styles.priorityMedium}
-                  items={queueComplaints.map(({ complaint, ai, rank, escalation }) => ({
-                    id: complaint.id,
-                    title: complaint.title || "Untitled complaint",
-                    meta: `${getAreaName(complaint)} • Queue ${ordinal(rank)} • ${friendlyEscalation(
-                      escalation
-                    )} • ${confidenceLabel(ai?.fusion_confidence)}`,
-                    badge: ordinal(rank),
-                  }))}
+                  items={queueComplaints.map(({ complaint, ai, rank, escalation }) => {
+                    const fullTitle = complaint.title || "Untitled complaint";
+                    return {
+                      id: complaint.id,
+                      title: shortenText(fullTitle, 30),
+                      fullTitle,
+                      meta: `${getAreaName(complaint)} • Queue ${ordinal(rank)} • ${friendlyEscalation(
+                        escalation
+                      )} • ${confidenceLabel(ai?.fusion_confidence)}`,
+                      badge: ordinal(rank),
+                    };
+                  })}
                 />
 
                 <article className={styles.dashboardInboxCard}>
                   <div className={styles.dashboardInboxHeader}>
                     <div>
-                      <h3 className={styles.dashboardInboxTitle}>Area hotspots</h3>
+                      <h3 className={styles.dashboardInboxTitle}>Submitted area hotspots</h3>
                       <p className={styles.dashboardInboxText}>
-                        Areas with the highest complaint concentration in the current dashboard view.
+                        Areas with the highest concentration of submitted complaints still waiting for first review.
                       </p>
                     </div>
                   </div>
 
-                  {topAreas.length === 0 ? (
-                    <div className={styles.emptyBox}>No area data available.</div>
+                  {submittedTopAreas.length === 0 ? (
+                    <div className={styles.emptyBox}>No submitted area data available.</div>
                   ) : (
                     <div className={styles.dashboardInboxList}>
-                      {topAreas.map((item) => (
+                      {submittedTopAreas.map((item) => (
                         <Link
                           key={item.label}
-                          href={buildComplaintsHref({ area: item.label })}
+                          href={buildComplaintsHref({ status: "submitted", area: item.label })}
                           className={styles.dashboardInboxItem}
                         >
                           <div className={styles.dashboardInboxItemTop}>
@@ -1020,7 +1053,7 @@ export default async function AuthorityPage() {
                             <span className={styles.chip}>{item.count}</span>
                           </div>
                           <p className={styles.dashboardInboxItemMeta}>
-                            {item.share.toFixed(1)}% of total complaints
+                            {item.share.toFixed(1)}% of submitted complaints
                           </p>
                         </Link>
                       ))}
@@ -1035,7 +1068,7 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Quick complaint review list</h2>
                   <p className={styles.sectionText}>
-                    A short list of recent complaints with only the key facts needed before opening the full review page.
+                    A short list of submitted complaints with only the key facts needed before opening the full review page.
                   </p>
                 </div>
 
@@ -1043,18 +1076,19 @@ export default async function AuthorityPage() {
                   <Link href="/authority/complaints" className={styles.primaryLink}>
                     Manage complaints
                   </Link>
-                  <Link href="/authority/analytics" className={styles.secondaryLink}>
-                    Open analytics
+                  <Link href={buildComplaintsHref({ status: "submitted" })} className={styles.secondaryLink}>
+                    View submitted only
                   </Link>
                 </div>
               </div>
 
-              {recentComplaints.length === 0 ? (
-                <div className={styles.emptyBox}>No complaints available yet.</div>
+              {reviewQueueComplaints.length === 0 ? (
+                <div className={styles.emptyBox}>
+                  No submitted complaints are waiting for first authority review.
+                </div>
               ) : (
                 <div className={styles.dashboardQueueList}>
-                  {recentComplaints.map((complaint) => {
-                    const ai = inferenceByComplaint.get(complaint.id);
+                  {reviewQueueComplaints.map(({ complaint, ai }) => {
                     const media = mediaByComplaint.get(complaint.id);
                     const reliability = ai?.model_versions?.reliability_status ?? null;
                     const manualReviewRequired = parseBoolean(
@@ -1071,12 +1105,14 @@ export default async function AuthorityPage() {
                       complaint.user_category ||
                       "Not available";
 
+                    const fullTitle = complaint.title || "Untitled complaint";
+
                     const reviewChipLabel =
                       manualReviewRequired || reliability === "manual_review_needed"
                         ? "Manual review needed"
                         : reliability === "reliable"
-                        ? "Reliable"
-                        : reliabilityLabel(reliability);
+                          ? "Reliable"
+                          : reliabilityLabel(reliability);
 
                     const reviewChipClass =
                       manualReviewRequired || reliability === "manual_review_needed"
@@ -1088,14 +1124,17 @@ export default async function AuthorityPage() {
                         <div className={styles.dashboardQueueThumb}>
                           <AuthorityDashboardThumb
                             src={media?.public_url ?? null}
-                            alt={complaint.title || "Complaint image"}
+                            alt={fullTitle}
                           />
                         </div>
 
                         <div className={styles.dashboardQueueMain}>
                           <div className={styles.dashboardQueueTitleRow}>
-                            <h3 className={styles.dashboardQueueTitle}>
-                              {complaint.title || "Untitled complaint"}
+                            <h3
+                              className={styles.dashboardQueueTitle}
+                              title={fullTitle}
+                            >
+                              {shortenText(fullTitle, 48)}
                             </h3>
                             <span className={statusClass(complaint.status)}>
                               {complaint.status}
@@ -1132,6 +1171,29 @@ export default async function AuthorityPage() {
                   })}
                 </div>
               )}
+            </section>
+
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h2 className={styles.sectionTitle}>Area overview</h2>
+                  <p className={styles.sectionText}>
+                    Overall hotspot areas across the full complaint dataset, including already reviewed complaints.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.statStrip}>
+                {topAreas.map((item) => (
+                  <MetricCard
+                    key={item.label}
+                    label={item.label}
+                    value={item.count}
+                    text={`${item.share.toFixed(1)}% of total complaints in this area.`}
+                    href={buildComplaintsHref({ area: item.label })}
+                  />
+                ))}
+              </div>
             </section>
           </div>
         </section>

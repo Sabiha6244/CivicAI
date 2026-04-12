@@ -1,4 +1,3 @@
-
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
@@ -42,6 +41,36 @@ type ClusterSummary = {
   sampleArea: string;
   sampleCategory: string;
 };
+
+function titleCaseWord(word: string) {
+  if (!word) return word;
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function humanizeLabel(value: string | null | undefined) {
+  const raw = (value || "").trim();
+  if (!raw) return "Uncategorized";
+
+  const normalized = raw
+    .replace(/_/g, " ")
+    .replace(/\s*-\s*/g, " - ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized
+    .split(" ")
+    .map((part) => {
+      if (part === "-" || /^[A-Z0-9]{2,}$/.test(part)) return part;
+      if (part.toLowerCase() === "ai") return "AI";
+      return titleCaseWord(part);
+    })
+    .join(" ");
+}
+
+function compactLabel(value: string, maxLength = 38) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1).trim()}…`;
+}
 
 function getAreaName(complaint: ComplaintRow) {
   return (
@@ -178,76 +207,78 @@ function BarChart({
   title,
   subtitle,
   items,
-  fillClass,
+  tone,
 }: {
   title: string;
   subtitle: string;
   items: RankedItem[];
-  fillClass: string;
+  tone: "teal" | "blue";
 }) {
-  const height = Math.max(220, items.length * 46 + 26);
   const max = Math.max(...items.map((item) => item.count), 1);
+
+  const fillToneClass =
+    tone === "teal"
+      ? styles.analyticsMiniBarFillArea
+      : styles.analyticsMiniBarFillCategory;
 
   return (
     <article className={styles.analyticsChartCard}>
       <h3 className={styles.sectionTitle} style={{ marginBottom: 8 }}>
         {title}
       </h3>
-      <p className={styles.sectionText} style={{ marginBottom: 14 }}>
+      <p className={styles.sectionText} style={{ marginBottom: 16 }}>
         {subtitle}
       </p>
 
       {items.length === 0 ? (
         <p className={styles.kvValue}>No data available.</p>
       ) : (
-        <svg
-          viewBox={`0 0 700 ${height}`}
-          width="100%"
-          height="100%"
-          role="img"
-          aria-label={title}
-          className={styles.analyticsChartSvg}
-        >
-          {items.map((item, index) => {
-            const y = 34 + index * 46;
-            const barWidth = (item.count / max) * 320;
+        <div style={{ display: "grid", gap: 16 }}>
+          {items.map((item) => {
+            const width = Math.max((item.count / max) * 100, 8);
+            const shortLabel = compactLabel(item.label, 42);
 
             return (
-              <g key={item.label}>
-                <text x="16" y={y} className={styles.analyticsChartLabel}>
-                  {item.label}
-                </text>
-
-                <rect
-                  x="250"
-                  y={y - 14}
-                  width="360"
-                  height="12"
-                  rx="999"
-                  className={styles.analyticsChartTrack}
-                />
-
-                <rect
-                  x="250"
-                  y={y - 14}
-                  width={barWidth}
-                  height="12"
-                  rx="999"
-                  className={fillClass}
-                />
-
-                <text
-                  x="680"
-                  y={y}
-                  textAnchor="end"
-                  className={styles.analyticsChartValue}
+              <div key={item.label} style={{ display: "grid", gap: 8 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
                 >
-                  {item.count}
-                </text>
-              </g>
+                  <span
+                    className={styles.analyticsMiniMetaLabel}
+                    title={item.label}
+                    style={{
+                      display: "block",
+                      minWidth: 0,
+                      flex: 1,
+                      whiteSpace: "normal",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {shortLabel}
+                  </span>
+                  <span
+                    className={styles.analyticsMiniMetaValue}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {item.count}
+                  </span>
+                </div>
+
+                <div className={styles.analyticsMiniBar}>
+                  <div
+                    className={`${styles.analyticsMiniBarFill} ${fillToneClass}`}
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+              </div>
             );
           })}
-        </svg>
+        </div>
       )}
     </article>
   );
@@ -296,7 +327,13 @@ function MiniCardGrid({
           <Link key={item.label} href={href} className={styles.analyticsMiniLink}>
             <article className={styles.analyticsMiniCard}>
               <div className={styles.analyticsMiniTop}>
-                <h3 className={styles.analyticsMiniTitle}>{item.label}</h3>
+                <h3
+                  className={styles.analyticsMiniTitle}
+                  title={item.label}
+                  style={{ wordBreak: "break-word" }}
+                >
+                  {compactLabel(item.label, 52)}
+                </h3>
               </div>
 
               <div className={styles.analyticsMiniBottom}>
@@ -412,8 +449,8 @@ export default async function AuthorityAnalyticsPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() { },
-        remove() { },
+        set() {},
+        remove() {},
       },
     }
   );
@@ -517,11 +554,9 @@ export default async function AuthorityAnalyticsPage() {
     const status = complaint.status || "unknown";
     statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
 
-    const category =
-      complaint.final_category ||
-      ai?.fusion_label ||
-      complaint.user_category ||
-      "Uncategorized";
+    const category = humanizeLabel(
+      complaint.final_category || ai?.fusion_label || complaint.user_category || "Uncategorized"
+    );
 
     categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
 
@@ -665,15 +700,12 @@ export default async function AuthorityAnalyticsPage() {
                 <Link href="/authority/complaints" className={styles.sidebarLink}>
                   Manage complaints
                 </Link>
-
                 <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
                   View Hotspots
                 </Link>
-
                 <Link href="/authority/analytics" className={styles.sidebarLinkActive}>
                   Authority analytics
                 </Link>
-
               </nav>
             </div>
           </aside>
@@ -831,14 +863,14 @@ export default async function AuthorityAnalyticsPage() {
                   title="Complaint status distribution"
                   subtitle="Current complaint counts by workflow stage."
                   items={statusChartItems}
-                  fillClass={styles.analyticsChartFillTeal}
+                  tone="teal"
                 />
 
                 <BarChart
                   title="Top complaint categories"
                   subtitle="Final category when available, otherwise the best available complaint category."
                   items={topCategories.slice(0, 5)}
-                  fillClass={styles.analyticsChartFillBlue}
+                  tone="blue"
                 />
               </div>
 
@@ -847,14 +879,14 @@ export default async function AuthorityAnalyticsPage() {
                   title="Top affected areas"
                   subtitle="Areas currently receiving the highest number of complaints."
                   items={topAreas.slice(0, 5)}
-                  fillClass={styles.analyticsChartFillTeal}
+                  tone="teal"
                 />
 
                 <BarChart
                   title="Repeated issue patterns"
                   subtitle="Area and category combinations that recur most often."
                   items={repeatedPatterns.slice(0, 5)}
-                  fillClass={styles.analyticsChartFillBlue}
+                  tone="blue"
                 />
               </div>
 

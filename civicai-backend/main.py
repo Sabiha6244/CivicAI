@@ -156,6 +156,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def preload_ai_models():
+    try:
+        load_text_assets()
+        print("Text model preloaded.")
+    except Exception as e:
+        print(f"Text model preload skipped: {e}")
+
+    try:
+        load_yolo_assets()
+        print("YOLO model preloaded.")
+    except Exception as e:
+        print(f"YOLO model preload skipped: {e}")
 
 @app.get("/health")
 def health():
@@ -526,7 +539,7 @@ def fetch_existing_inference_results_for_complaints(complaint_ids: list[str]) ->
 
     params = {
         "complaint_id": build_in_filter(complaint_ids),
-        "select": "complaint_id,fusion_confidence,fusion_label",
+        "select": "complaint_id,fusion_confidence,fusion_label,model_versions",
         "limit": "500",
     }
     r = rest_get("inference_results", params=params)
@@ -1208,7 +1221,7 @@ def compute_saw_scores_exact(
     return result_rows
 
 
-def get_open_complaint_rows(limit: int = 500) -> list[Dict[str, Any]]:
+def get_all_complaint_rows(limit: int = 500) -> list[Dict[str, Any]]:
     params = {
         "select": "*",
         "order": "created_at.asc",
@@ -1220,15 +1233,258 @@ def get_open_complaint_rows(limit: int = 500) -> list[Dict[str, Any]]:
             status_code=500,
             detail=f"Failed to load complaint pool: {r.status_code} {r.text}"
         )
+    return r.json() or []
 
-    rows = r.json() or []
-    open_rows = []
-    for row in rows:
+
+def get_open_complaint_rows(
+    limit: int = 500,
+    active_statuses: Optional[list[str]] = None,
+) -> list[Dict[str, Any]]:
+    status_list = active_statuses or ["submitted", "processing"]
+    status_set = {
+        normalize_text(status).lower()
+        for status in status_list
+        if normalize_text(status)
+    }
+
+    rows = get_all_complaint_rows(limit=limit)
+    return [
+        row
+        for row in rows
+        if normalize_text(row.get("status") or "").lower() in status_set
+    ]
+
+
+def sort_scored_rows_for_queue(
+    scored_rows: list[dict[str, Any]],
+    complaint_lookup: dict[str, Dict[str, Any]],
+) -> list[dict[str, Any]]:
+    def tie_key(row: dict[str, Any]) -> tuple[float, float, str]:
+        complaint_id = str(row.get("id") or "")
+        complaint = complaint_lookup.get(complaint_id, {})
+        created_at = complaint.get("created_at")
+        created_ts = (
+            parse_iso_datetime(created_at).timestamp()
+            if created_at
+            else float("inf")
+        )
+        return (
+            -float(row.get("score") or 0.0),
+            created_ts,
+            complaint_id,
+        )
+
+    sorted_rows = sorted(scored_rows, key=tie_key)
+
+    for rank, row in enumerate(sorted_rows, start=1):
+        row["rank"] = rank
+
+    return sorted_rows
+
+
+def update_priority_fields_in_model_versions(
+    complaint_id: str,
+    existing_model_versions: Optional[Dict[str, Any]],
+    *,
+    priority_status: str,
+    priority_rank: Optional[int],
+    priority_reason: Optional[str],
+    priority_normalized: Optional[Dict[str, Any]],
+    priority_raw: Optional[Dict[str, Any]],
+    urgency_score: Optional[float],
+    frequency_score: Optional[int],
+    priority_score: Optional[float],
+):
+    merged_model_versions = dict(existing_model_versions or {})
+
+    merged_model_versions["priority_status"] = priority_status
+    merged_model_versions["priority_rank"] = priority_rank if priority_rank is not None else ""
+    merged_model_versions["priority_reason"] = priority_reason or ""
+    merged_model_versions["priority_normalized"] = priority_normalized or {}
+    merged_model_versions["priority_raw"] = priority_raw or {}
+    merged_model_versions["urgency_score"] = urgency_score if urgency_score is not None else ""
+    merged_model_versions["frequency_score"] = frequency_score if frequency_score is not None else ""
+
+    payload = {
+        "model_versions": serialize_model_versions(merged_model_versions),
+        "priority_score": priority_score,
+        "updated_at": iso(utc_now()),
+    }
+
+    params = {"complaint_id": f"eq.{complaint_id}"}
+    r = rest_patch("inference_results", payload, params=params)
+    if r.status_code not in (200, 204):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update priority metadata for complaint {complaint_id}: {r.status_code} {r.text}"
+        )
+
+
+def recompute_priority_ranks_for_queue(limit: int = 500) -> Dict[str, Any]:
+    criteria = get_saw_criteria()
+    needs_frequency = any(
+        criterion["field"] == "complaint_frequency"
+        for criterion in criteria
+    )
+
+    all_rows = get_all_complaint_rows(limit=limit)
+    submitted_pool = [
+        row
+        for row in all_rows
+        if normalize_text(row.get("status") or "").lower() == "submitted"
+    ]
+    active_pool = [
+        row
+        for row in all_rows
+        if normalize_text(row.get("status") or "").lower() in {"submitted", "processing"}
+    ]
+
+    complaint_lookup = {
+        str(row.get("id")): row
+        for row in all_rows
+        if row.get("id")
+    }
+
+    complaint_ids = [str(row.get("id")) for row in all_rows if row.get("id")]
+    inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
+
+    frequency_cache: dict[str, int] = {}
+    if needs_frequency:
+        for row in submitted_pool:
+            complaint_id = str(row.get("id") or "")
+            frequency_cache[complaint_id] = compute_frequency_score(
+                complaint=row,
+                all_open_complaints=active_pool,
+                inference_map=inference_map,
+                radius_m=FREQUENCY_RADIUS_M,
+                days=FREQUENCY_TIME_WINDOW_DAYS,
+            )
+
+    required_fields = {criterion["field"] for criterion in criteria}
+    alternatives: list[dict[str, Any]] = []
+
+    for row in submitted_pool:
+        complaint_id = str(row.get("id") or "")
+        sentiment_score = row.get("sentiment_score")
+        existing_inf = inference_map.get(complaint_id) or {}
+        fusion_conf_raw = existing_inf.get("fusion_confidence")
+
+        if sentiment_score is None or fusion_conf_raw is None:
+            continue
+
+        try:
+            urgency_score = urgency_from_sentiment_exact(float(sentiment_score))
+            elapsed_hours = calculate_elapsed_hours(str(row.get("created_at")))
+        except Exception:
+            continue
+
+        alternative = {
+            "id": complaint_id,
+            "urgency_score": safe_float(urgency_score),
+            "fusion_confidence": safe_float(float(fusion_conf_raw)),
+            "elapsed_hours": safe_float(elapsed_hours),
+        }
+
+        if needs_frequency:
+            alternative["complaint_frequency"] = int(frequency_cache.get(complaint_id, 0))
+
+        if all(alternative.get(field) is not None for field in required_fields):
+            alternatives.append(alternative)
+
+    ranked_rows: list[dict[str, Any]] = []
+    if alternatives:
+        ranked_rows = compute_saw_scores_exact(alternatives, criteria)
+        ranked_rows = sort_scored_rows_for_queue(ranked_rows, complaint_lookup)
+
+    ranked_map = {
+        str(row.get("id")): row
+        for row in ranked_rows
+        if row.get("id")
+    }
+
+    updated_count = 0
+    cleared_count = 0
+
+    # Write unique ranks for all submitted complaints that are rankable.
+    for row in submitted_pool:
+        complaint_id = str(row.get("id") or "")
+        existing_inf = inference_map.get(complaint_id)
+
+        if not existing_inf:
+            continue
+
+        if complaint_id in ranked_map:
+            ranked = ranked_map[complaint_id]
+            update_priority_fields_in_model_versions(
+                complaint_id=complaint_id,
+                existing_model_versions=existing_inf.get("model_versions"),
+                priority_status="computed",
+                priority_rank=int(ranked["rank"]),
+                priority_reason="Complaint ranked in submitted first-review queue.",
+                priority_normalized=dict(ranked.get("normalized") or {}),
+                priority_raw=dict(ranked.get("raw") or {}),
+                urgency_score=safe_float(float(ranked["raw"].get("urgency_score", 0.0))),
+                frequency_score=(
+                    int(ranked["raw"].get("complaint_frequency", 0))
+                    if "complaint_frequency" in (ranked.get("raw") or {})
+                    else None
+                ),
+                priority_score=safe_float(float(ranked.get("score") or 0.0)),
+            )
+            updated_count += 1
+        else:
+            urgency_score = None
+            try:
+                if row.get("sentiment_score") is not None:
+                    urgency_score = urgency_from_sentiment_exact(float(row.get("sentiment_score")))
+            except Exception:
+                urgency_score = None
+
+            update_priority_fields_in_model_versions(
+                complaint_id=complaint_id,
+                existing_model_versions=existing_inf.get("model_versions"),
+                priority_status="not_computed",
+                priority_rank=None,
+                priority_reason="Complaint could not be ranked in the submitted first-review queue.",
+                priority_normalized={},
+                priority_raw={},
+                urgency_score=urgency_score,
+                frequency_score=frequency_cache.get(complaint_id) if needs_frequency else None,
+                priority_score=None,
+            )
+            cleared_count += 1
+
+    # Clear stale queue metadata from complaints that are no longer in the submitted queue.
+    for row in all_rows:
         status_clean = normalize_text(row.get("status") or "").lower()
-        if status_clean != "resolved":
-            open_rows.append(row)
-    return open_rows
+        if status_clean == "submitted":
+            continue
 
+        complaint_id = str(row.get("id") or "")
+        existing_inf = inference_map.get(complaint_id)
+        if not existing_inf:
+            continue
+
+        update_priority_fields_in_model_versions(
+            complaint_id=complaint_id,
+            existing_model_versions=existing_inf.get("model_versions"),
+            priority_status="not_in_queue",
+            priority_rank=None,
+            priority_reason="Complaint is not in the submitted first-review queue.",
+            priority_normalized={},
+            priority_raw={},
+            urgency_score=None,
+            frequency_score=None,
+            priority_score=None,
+        )
+        cleared_count += 1
+
+    return {
+        "ranked_count": len(ranked_rows),
+        "submitted_count": len(submitted_pool),
+        "cleared_count": cleared_count,
+        "updated_count": updated_count,
+    }
 
 
 def parse_iso_datetime(value: Any) -> datetime:
@@ -1309,6 +1565,59 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
     return float(earth_radius_m * c)
 
+TEXT_EMBED_CACHE: dict[str, np.ndarray] = {}
+MAX_TEXT_EMBED_CACHE = 1000
+
+
+def parse_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, list):
+                return [str(v).strip() for v in decoded if str(v).strip()]
+        except json.JSONDecodeError:
+            pass
+
+        return [raw] if raw else []
+
+    return []
+
+def get_saved_duplicate_ids_from_inference(
+    inference_row: Optional[Dict[str, Any]],
+) -> list[str]:
+    if not inference_row:
+        return []
+
+    model_versions = inference_row.get("model_versions") or {}
+    return parse_string_list(model_versions.get("duplicate_ids"))
+
+def get_text_embedding_cached(text: str) -> np.ndarray:
+    clean = normalize_text(text)
+    if not clean:
+        return np.array([], dtype=np.float32)
+
+    cache_key = hashlib.sha1(clean.encode("utf-8")).hexdigest()
+
+    cached = TEXT_EMBED_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    embedding = get_text_embedding(clean)
+
+    if len(TEXT_EMBED_CACHE) >= MAX_TEXT_EMBED_CACHE:
+        TEXT_EMBED_CACHE.clear()
+
+    TEXT_EMBED_CACHE[cache_key] = embedding
+    return embedding
 
 def get_text_embedding(text: str) -> np.ndarray:
     tokenizer, model, _ = load_text_assets()
@@ -1348,11 +1657,16 @@ def detect_duplicates_for_complaint(
     if not target_text:
         return []
 
-    target_embedding = get_text_embedding(target_text).reshape(1, -1)
+    target_embedding = get_text_embedding_cached(target_text)
+    if target_embedding.size == 0:
+        return []
+
+    target_embedding = target_embedding.reshape(1, -1)
     target_time = parse_iso_datetime(target_complaint.get("created_at"))
     max_time_delta_seconds = float(time_window_hours) * 3600.0
 
     duplicates: list[str] = []
+
     for other in all_open_complaints:
         other_id = str(other.get("id") or "")
         if other_id == str(target_complaint.get("id") or ""):
@@ -1381,8 +1695,16 @@ def detect_duplicates_for_complaint(
         if not other_text:
             continue
 
-        other_embedding = get_text_embedding(other_text).reshape(1, -1)
-        similarity = float(cosine_similarity(target_embedding, other_embedding)[0][0])
+        other_embedding = get_text_embedding_cached(other_text)
+        if other_embedding.size == 0:
+            continue
+
+        similarity = float(
+            cosine_similarity(
+                target_embedding,
+                other_embedding.reshape(1, -1),
+            )[0][0]
+        )
 
         if similarity > float(text_threshold):
             duplicates.append(other_id)
@@ -1549,12 +1871,12 @@ def calculate_priority_exact(
     current_fusion_confidence: float,
 ) -> Dict[str, Any]:
     """
-Exact-priority path:
-1) urgency from sentiment: U_i = (1 - s_i) / 2
-2) SAW normalization and ranking over the active complaint pool
-3) exact escalation condition based on elapsed time and unresolved status
-4) frequency is included when CIVICAI_SAW_CRITERIA_JSON contains complaint_frequency
-"""
+    Exact-priority path:
+    1) urgency from sentiment: U_i = (1 - s_i) / 2
+    2) SAW normalization and ranking over the submitted first-review queue
+    3) exact escalation condition based on elapsed time and unresolved status
+    4) frequency is included when CIVICAI_SAW_CRITERIA_JSON contains complaint_frequency
+    """
     try:
         criteria = get_saw_criteria()
         escalation_threshold_hours = get_escalation_threshold_hours()
@@ -1572,6 +1894,8 @@ Exact-priority path:
             "escalation_status": None,
             "escalation_reason": None,
         }
+
+    current_status = normalize_text(current_complaint.get("status") or "").lower()
 
     current_sentiment = current_complaint.get("sentiment_score")
     if current_sentiment is None:
@@ -1606,33 +1930,77 @@ Exact-priority path:
             "escalation_reason": None,
         }
 
-    current_id = str(current_complaint.get("id") or "")
-    pool = get_open_complaint_rows(limit=500)
-    pool = upsert_current_complaint_into_pool(pool, current_complaint)
+    escalation = should_escalate_exact(
+        created_at_iso=str(current_complaint.get("created_at")),
+        current_status=str(current_complaint.get("status") or ""),
+        escalation_threshold_hours=escalation_threshold_hours,
+    )
 
-    complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
+    escalation_status = (
+        "escalate_now"
+        if escalation.get("should_escalate")
+        else "within_threshold"
+    )
+
+    escalation_reason = (
+        f"Elapsed hours: {escalation.get('elapsed_hours')} | "
+        f"Threshold: {escalation.get('threshold_hours')} | "
+        f"Status: {current_complaint.get('status') or 'unknown'}"
+    )
+
+    if current_status != "submitted":
+        return {
+            "status": "not_in_queue",
+            "reason": "Complaint is not in the submitted first-review queue.",
+            "score": None,
+            "rank": None,
+            "urgency_score": safe_float(current_urgency),
+            "frequency_score": None,
+            "normalized": {},
+            "raw": {},
+            "escalation": escalation,
+            "escalation_status": escalation_status,
+            "escalation_reason": escalation_reason,
+        }
+
+    current_id = str(current_complaint.get("id") or "")
+
+    submitted_pool = get_open_complaint_rows(limit=500, active_statuses=["submitted"])
+    active_pool = get_open_complaint_rows(limit=500, active_statuses=["submitted", "processing"])
+
+    submitted_pool = upsert_current_complaint_into_pool(submitted_pool, current_complaint)
+    active_pool = upsert_current_complaint_into_pool(active_pool, current_complaint)
+
+    complaint_lookup = {
+        str(row.get("id")): row
+        for row in (submitted_pool + active_pool + [current_complaint])
+        if row.get("id")
+    }
+
+    complaint_ids = list(complaint_lookup.keys())
     inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
 
     needs_frequency = any(criterion["field"] == "complaint_frequency" for criterion in criteria)
     frequency_cache: dict[str, int] = {}
 
     if needs_frequency:
-        for row in pool:
+        for row in submitted_pool:
             row_id = str(row.get("id") or "")
             frequency_cache[row_id] = compute_frequency_score(
                 complaint=row,
-                all_open_complaints=pool,
+                all_open_complaints=active_pool,
                 inference_map=inference_map,
                 radius_m=FREQUENCY_RADIUS_M,
                 days=FREQUENCY_TIME_WINDOW_DAYS,
             )
 
-    alternatives: list[dict[str, Any]] = []
     required_fields = {criterion["field"] for criterion in criteria}
+    alternatives: list[dict[str, Any]] = []
 
-    for row in pool:
+    for row in submitted_pool:
         complaint_id = str(row.get("id") or "")
         sentiment_score = row.get("sentiment_score")
+
         if sentiment_score is None:
             continue
 
@@ -1661,91 +2029,45 @@ Exact-priority path:
         if needs_frequency:
             alternative["complaint_frequency"] = int(frequency_cache.get(complaint_id, 0))
 
-        if any(alternative.get(field) is None for field in required_fields):
-            continue
-
-        alternatives.append(alternative)
+        if all(alternative.get(field) is not None for field in required_fields):
+            alternatives.append(alternative)
 
     current_frequency_score = frequency_cache.get(current_id) if needs_frequency else None
 
     if not alternatives:
         return {
             "status": "not_computed",
-            "reason": "No valid complaint pool available for exact SAW ranking.",
+            "reason": "No valid submitted complaint pool available for exact SAW ranking.",
             "score": None,
             "rank": None,
             "urgency_score": safe_float(current_urgency),
             "frequency_score": current_frequency_score,
             "normalized": {},
             "raw": {},
-            "escalation": None,
-            "escalation_status": None,
-            "escalation_reason": None,
+            "escalation": escalation,
+            "escalation_status": escalation_status,
+            "escalation_reason": escalation_reason,
         }
-
-    if current_id not in {alt["id"] for alt in alternatives}:
-        try:
-            current_elapsed = calculate_elapsed_hours(str(current_complaint.get("created_at")))
-        except Exception:
-            current_elapsed = None
-
-        current_alternative = {
-            "id": current_id,
-            "urgency_score": safe_float(current_urgency),
-            "fusion_confidence": safe_float(current_fusion_confidence),
-            "elapsed_hours": current_elapsed,
-        }
-
-        if needs_frequency:
-            current_alternative["complaint_frequency"] = int(
-                compute_frequency_score(
-                    complaint=current_complaint,
-                    all_open_complaints=pool,
-                    inference_map=inference_map,
-                    radius_m=FREQUENCY_RADIUS_M,
-                    days=FREQUENCY_TIME_WINDOW_DAYS,
-                )
-            )
-            current_frequency_score = current_alternative["complaint_frequency"]
-
-        if all(current_alternative.get(field) is not None for field in required_fields):
-            alternatives.append(current_alternative)
 
     scored_rows = compute_saw_scores_exact(alternatives, criteria)
+    scored_rows = sort_scored_rows_for_queue(scored_rows, complaint_lookup)
+
     current_row = next((row for row in scored_rows if row["id"] == current_id), None)
 
     if current_row is None:
         return {
             "status": "not_computed",
-            "reason": "Current complaint could not be ranked in the exact SAW pool.",
+            "reason": "Current complaint could not be ranked in the submitted first-review queue.",
             "score": None,
             "rank": None,
             "urgency_score": safe_float(current_urgency),
             "frequency_score": current_frequency_score,
             "normalized": {},
             "raw": {},
-            "escalation": None,
-            "escalation_status": None,
-            "escalation_reason": None,
+            "escalation": escalation,
+            "escalation_status": escalation_status,
+            "escalation_reason": escalation_reason,
         }
-
-    escalation = should_escalate_exact(
-        created_at_iso=str(current_complaint.get("created_at")),
-        current_status=str(current_complaint.get("status") or ""),
-        escalation_threshold_hours=escalation_threshold_hours,
-    )
-
-    escalation_status = (
-        "escalate_now"
-        if escalation.get("should_escalate")
-        else "within_threshold"
-    )
-
-    escalation_reason = (
-        f"Elapsed hours: {escalation.get('elapsed_hours')} | "
-        f"Threshold: {escalation.get('threshold_hours')} | "
-        f"Status: {current_complaint.get('status') or 'unknown'}"
-    )
 
     raw_values = dict(current_row["raw"])
     normalized_values = dict(current_row["normalized"])
@@ -1953,7 +2275,6 @@ def otp_verify(body: VerifyOtpReq):
     }
 
 
-
 @app.post("/ai/run/{complaint_id}")
 def run_ai_for_complaint(complaint_id: str):
     require_backend_env()
@@ -1966,7 +2287,6 @@ def run_ai_for_complaint(complaint_id: str):
         description=complaint.get("description") or "",
     )
     update_complaint_sentiment_score(complaint_id, sentiment_score)
-
     complaint["sentiment_score"] = sentiment_score
 
     citizen_category_raw = complaint.get("user_category")
@@ -2008,20 +2328,14 @@ def run_ai_for_complaint(complaint_id: str):
         and citizen_category_internal != decision_result.get("final_label")
     )
 
+    # Build the active pool once.
     pool = get_open_complaint_rows(limit=500)
     pool = upsert_current_complaint_into_pool(pool, complaint)
     complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
     inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
 
-    duplicate_ids = detect_duplicates_for_complaint(
-        target_complaint=complaint,
-        all_open_complaints=pool,
-        text_threshold=DUPLICATE_TEXT_THRESHOLD,
-        location_radius_m=DUPLICATE_LOCATION_RADIUS_M,
-        time_window_hours=DUPLICATE_TIME_WINDOW_HOURS,
-    )
-    duplicate_count = len(duplicate_ids)
-
+    # Keep frequency + current complaint ranking, but do not do live duplicate
+    # detection or global queue recompute inside the blocking AI request.
     frequency_score = compute_frequency_score(
         complaint=complaint,
         all_open_complaints=pool,
@@ -2042,6 +2356,11 @@ def run_ai_for_complaint(complaint_id: str):
         priority_result=priority_result,
         citizen_ai_conflict=citizen_ai_conflict,
     )
+
+    # Preserve already-saved duplicate IDs instead of recomputing them live here.
+    existing_current_inference = inference_map.get(complaint_id)
+    duplicate_ids = get_saved_duplicate_ids_from_inference(existing_current_inference)
+    duplicate_count = len(duplicate_ids)
 
     model_versions_payload = serialize_model_versions({
         "text_model": "roberta-base-local-finetuned",
@@ -2073,6 +2392,7 @@ def run_ai_for_complaint(complaint_id: str):
         "frequency_score": priority_result.get("frequency_score", frequency_score),
         "duplicate_count": duplicate_count,
         "duplicate_ids": duplicate_ids,
+        "duplicate_mode": "saved_cache_only",
         "duplicate_text_threshold": DUPLICATE_TEXT_THRESHOLD,
         "duplicate_location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
         "duplicate_time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
@@ -2117,6 +2437,7 @@ def run_ai_for_complaint(complaint_id: str):
         "citizen_ai_conflict": citizen_ai_conflict,
         "duplicate_ids": duplicate_ids,
         "duplicate_count": duplicate_count,
+        "duplicate_mode": "saved_cache_only",
         "frequency_score": frequency_score,
         "text_result": {
             "label_full_18": text_result.get("label"),
@@ -2136,12 +2457,25 @@ def run_ai_for_complaint(complaint_id: str):
         },
         "decision_result": decision_result,
         "priority_result": priority_result,
+        "queue_recompute": {
+            "ok": False,
+            "skipped": True,
+            "reason": "Global queue recompute is skipped during AI run for speed. Queue recompute still runs on authority save and can be triggered manually via /priority/recompute.",
+        },
         "summary": summary,
         "reliability_status": reliability["reliability_status"],
         "manual_review_required": reliability["manual_review_required"],
         "quality_flags": reliability["quality_flags"],
     }
 
+@app.post("/priority/recompute")
+def recompute_priority_queue():
+    require_backend_env()
+    result = recompute_priority_ranks_for_queue(limit=500)
+    return {
+        "ok": True,
+        **result,
+    }
 
 @app.get("/analytics/hotspots")
 def get_hotspots(
@@ -2163,10 +2497,36 @@ def get_hotspots(
 
 
 @app.get("/complaints/{complaint_id}/duplicates")
-def get_duplicates_for_complaint(complaint_id: str):
+def get_duplicates_for_complaint(
+    complaint_id: str,
+    refresh: bool = Query(
+        False,
+        description="If true, recompute duplicates live. Otherwise return saved duplicate IDs from inference_results."
+    ),
+):
     require_backend_env()
 
     complaint = get_complaint_row(complaint_id)
+
+    existing_map = fetch_existing_inference_results_for_complaints([complaint_id])
+    existing_inf = existing_map.get(complaint_id)
+
+    saved_duplicate_ids: list[str] = []
+    if existing_inf:
+        model_versions = existing_inf.get("model_versions") or {}
+        saved_duplicate_ids = parse_string_list(model_versions.get("duplicate_ids"))
+
+    if not refresh:
+        return {
+            "complaint_id": complaint_id,
+            "duplicate_count": len(saved_duplicate_ids),
+            "duplicate_ids": saved_duplicate_ids,
+            "text_threshold": DUPLICATE_TEXT_THRESHOLD,
+            "location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
+            "time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
+            "source": "saved_inference",
+        }
+
     pool = get_open_complaint_rows(limit=500)
     pool = upsert_current_complaint_into_pool(pool, complaint)
 
@@ -2185,4 +2545,5 @@ def get_duplicates_for_complaint(complaint_id: str):
         "text_threshold": DUPLICATE_TEXT_THRESHOLD,
         "location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
         "time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
+        "source": "live_refresh",
     }

@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
-export async function POST(
+type DuplicateComplaintRow = {
+  id: string;
+  title: string | null;
+  status: string;
+  created_at: string;
+};
+
+export async function GET(
   _req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
@@ -38,11 +45,7 @@ export async function POST(
       .eq("id", user.id)
       .single();
 
-    if (profileError || !profile) {
-      return NextResponse.json({ error: "Profile not found." }, { status: 403 });
-    }
-
-    if (!profile.is_verified || profile.role !== "authority") {
+    if (profileError || !profile?.is_verified || profile.role !== "authority") {
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
@@ -52,13 +55,11 @@ export async function POST(
       "http://127.0.0.1:8000";
 
     const controller = new AbortController();
-    const timeoutMs = 120_000;
-
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const aiRes = await fetch(`${backendBase}/ai/run/${id}`, {
-        method: "POST",
+      const dupRes = await fetch(`${backendBase}/complaints/${id}/duplicates`, {
+        method: "GET",
         headers: {
           Accept: "application/json",
         },
@@ -66,35 +67,48 @@ export async function POST(
         signal: controller.signal,
       });
 
-      const rawText = await aiRes.text();
+      const payload = await dupRes.json().catch(() => ({}));
 
-      if (!aiRes.ok) {
+      if (!dupRes.ok) {
         return NextResponse.json(
-          {
-            error: `AI run failed: ${rawText || aiRes.statusText}`,
-          },
-          { status: aiRes.status }
+          { error: payload?.detail || payload?.error || "Failed to load duplicates." },
+          { status: dupRes.status }
         );
       }
 
-      let parsed: unknown = null;
-      try {
-        parsed = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        parsed = rawText;
+      const duplicateIds = Array.isArray(payload?.duplicate_ids)
+        ? payload.duplicate_ids.map((item: unknown) => String(item)).filter(Boolean)
+        : [];
+
+      let duplicates: DuplicateComplaintRow[] = [];
+
+      if (duplicateIds.length > 0) {
+        const { data: rows, error: duplicateRowsError } = await supabase
+          .from("complaints")
+          .select("id, title, status, created_at")
+          .in("id", duplicateIds)
+          .order("created_at", { ascending: false });
+
+        if (duplicateRowsError) {
+          return NextResponse.json(
+            { error: duplicateRowsError.message || "Failed to load duplicate rows." },
+            { status: 500 }
+          );
+        }
+
+        duplicates = (rows || []) as DuplicateComplaintRow[];
       }
 
       return NextResponse.json({
         ok: true,
-        result: parsed,
+        duplicate_count: duplicateIds.length,
+        duplicates,
+        source: payload?.source || "saved_inference",
       });
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return NextResponse.json(
-          {
-            error:
-              "AI run timed out after 120 seconds. The backend is taking too long, most likely during duplicate detection or model work.",
-          },
+          { error: "Duplicate lookup timed out." },
           { status: 504 }
         );
       }
@@ -107,7 +121,9 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Unexpected server error.",
+          error instanceof Error
+            ? error.message
+            : "Unexpected server error while loading duplicates.",
       },
       { status: 500 }
     );
