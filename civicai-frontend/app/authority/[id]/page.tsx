@@ -196,6 +196,46 @@ function visualEvidenceText(
   return `${label} (${nicePercent(conf)})`;
 }
 
+function urgencyExplanation(
+  urgencyScore: number | null,
+  fusionConfidence: number | null,
+  frequencyRaw: number | null,
+  duplicateCount: number
+) {
+  if (urgencyScore == null) {
+    return "Urgency is not available yet. Run AI again if this complaint was updated recently.";
+  }
+
+  const reasons: string[] = [];
+  reasons.push(
+    "Urgency in the current deployed backend is based on complaint-text sentiment, not directly on fusion confidence or image evidence."
+  );
+
+  if (fusionConfidence != null && fusionConfidence >= 0.85 && urgencyScore < 0.4) {
+    reasons.push(
+      "So the model can be very sure about the category while the urgency score still stays low."
+    );
+  }
+
+  if (frequencyRaw != null && frequencyRaw > 0) {
+    reasons.push(
+      `Area frequency still contributes separately through priority ranking, and this case currently has frequency ${frequencyRaw}.`
+    );
+  } else {
+    reasons.push(
+      "Area frequency does not appear strong yet for this case, so it is not lifting the priority."
+    );
+  }
+
+  if (duplicateCount > 0) {
+    reasons.push(
+      `Duplicate matches (${duplicateCount}) may support broader priority handling, but they do not directly replace the urgency field.`
+    );
+  }
+
+  return reasons.join(" ");
+}
+
 export default async function AuthorityComplaintDetailPage({
   params,
 }: {
@@ -271,6 +311,10 @@ export default async function AuthorityComplaintDetailPage({
   }
 
   const complaint = complaintData as ComplaintDetail;
+  const areaText =
+    [complaint.city_area, complaint.upazila, complaint.district]
+      .filter(Boolean)
+      .join(", ") || "Not provided";
 
   const { data: mediaRows } = await supabase
     .from("complaint_media")
@@ -383,6 +427,8 @@ export default async function AuthorityComplaintDetailPage({
     urgencyScoreRaw != null ? Math.round(urgencyScoreRaw * 100) : null;
 
   const duplicateCount = duplicateComplaints.length;
+  const finalOperationalCategory =
+    complaint.final_category || ai?.fusion_label || complaint.user_category || "Not set";
 
   const readableConfidence = confidenceLabel(ai?.fusion_confidence);
   const readableEscalation = friendlyEscalation(escalationStatus);
@@ -393,6 +439,13 @@ export default async function AuthorityComplaintDetailPage({
   const readableVisualEvidence = visualEvidenceText(
     ai?.image_labels,
     ai?.image_confidences
+  );
+
+  const urgencyNote = urgencyExplanation(
+    urgencyScoreRaw,
+    ai?.fusion_confidence ?? null,
+    frequencyRaw,
+    duplicateCount
   );
 
   const priorityNote =
@@ -440,8 +493,8 @@ export default async function AuthorityComplaintDetailPage({
                     {complaint.title || "Complaint detail"}
                   </h1>
                   <p className={styles.subtitle}>
-                    Review this case, verify the evidence, and update its final
-                    handling from the authority action panel.
+                    Review this case, confirm the operational category, and publish
+                    a cleaner authority update from the action panel.
                   </p>
 
                   <div className={styles.detailMetaRow}>
@@ -451,12 +504,7 @@ export default async function AuthorityComplaintDetailPage({
                     <span className={styles.metaPill}>
                       Submitted: {formatDate(complaint.created_at)}
                     </span>
-                    <span className={styles.metaPill}>
-                      Area:{" "}
-                      {[complaint.city_area, complaint.upazila, complaint.district]
-                        .filter(Boolean)
-                        .join(", ") || "Not provided"}
-                    </span>
+                    <span className={styles.metaPill}>Area: {areaText}</span>
                   </div>
                 </div>
 
@@ -474,6 +522,52 @@ export default async function AuthorityComplaintDetailPage({
             <div className={styles.detailGrid}>
               <section className={styles.leftColumn}>
                 <article className={styles.panel}>
+                  <h2 className={styles.panelTitle}>Decision summary</h2>
+
+                  <div className={styles.panelBody}>
+                    <div className={styles.highlightBox}>
+                      <p className={styles.kvLabel}>Current working category</p>
+                      <p className={styles.kvValue}>{finalOperationalCategory}</p>
+                    </div>
+
+                    <div className={styles.aiStatGrid}>
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>AI confidence</p>
+                        <p className={styles.aiStatValue}>{readableConfidence}</p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Reliability</p>
+                        <p className={styles.aiStatValue}>
+                          <span className={reliabilityClass(reliabilityStatus)}>
+                            {reliabilityLabel(reliabilityStatus)}
+                          </span>
+                        </p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Queue position</p>
+                        <p className={styles.aiStatValue}>
+                          {priorityRank != null ? ordinal(priorityRank) : "N/A"}
+                        </p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Urgency</p>
+                        <p className={styles.aiStatValue}>
+                          {urgencyPercent != null ? `${urgencyPercent}%` : "N/A"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className={styles.infoBox}>
+                      <p className={styles.kvLabel}>Priority interpretation</p>
+                      <p className={styles.kvValue}>{urgencyNote}</p>
+                    </div>
+                  </div>
+                </article>
+
+                <article className={styles.panel}>
                   <h2 className={styles.panelTitle}>Case overview</h2>
 
                   <div className={styles.panelBody}>
@@ -483,14 +577,14 @@ export default async function AuthorityComplaintDetailPage({
                     </div>
 
                     <div className={styles.kvGrid}>
-                      <div className={styles.kvBlock}>
+                      <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Address</p>
                         <p className={styles.kvValue}>
                           {complaint.address_label || "Not provided"}
                         </p>
                       </div>
 
-                      <div className={styles.kvBlock}>
+                      <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Administrative area</p>
                         <p className={styles.kvValue}>
                           {[
@@ -504,14 +598,14 @@ export default async function AuthorityComplaintDetailPage({
                         </p>
                       </div>
 
-                      <div className={styles.kvBlock}>
+                      <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Location details</p>
                         <p className={styles.kvValue}>
                           {complaint.location_details || "Not provided"}
                         </p>
                       </div>
 
-                      <div className={styles.kvBlock}>
+                      <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Coordinates</p>
                         <p className={styles.kvValue}>
                           {complaint.lat != null && complaint.lng != null
@@ -640,24 +734,10 @@ export default async function AuthorityComplaintDetailPage({
                   <h2 className={styles.panelTitle}>AI assessment</h2>
 
                   <div className={styles.panelBody}>
-                    <div className={styles.highlightBox}>
-                      <p className={styles.kvLabel}>Suggested category</p>
-                      <p className={styles.kvValue}>{ai?.fusion_label || "N/A"}</p>
-                    </div>
-
                     <div className={styles.aiStatGrid}>
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>AI confidence</p>
-                        <p className={styles.aiStatValue}>{readableConfidence}</p>
-                      </div>
-
-                      <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Reliability</p>
-                        <p className={styles.aiStatValue}>
-                          <span className={reliabilityClass(reliabilityStatus)}>
-                            {reliabilityLabel(reliabilityStatus)}
-                          </span>
-                        </p>
+                        <p className={styles.aiStatLabel}>Suggested category</p>
+                        <p className={styles.aiStatValue}>{ai?.fusion_label || "N/A"}</p>
                       </div>
 
                       <div className={styles.aiStatCard}>
@@ -670,6 +750,11 @@ export default async function AuthorityComplaintDetailPage({
                       <div className={styles.aiStatCard}>
                         <p className={styles.aiStatLabel}>Visual evidence</p>
                         <p className={styles.aiStatValue}>{readableVisualEvidence}</p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Duplicate matches</p>
+                        <p className={styles.aiStatValue}>{duplicateCount}</p>
                       </div>
                     </div>
 
@@ -693,22 +778,8 @@ export default async function AuthorityComplaintDetailPage({
                   <div className={styles.panelBody}>
                     <div className={styles.aiStatGrid}>
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Queue position</p>
-                        <p className={styles.aiStatValue}>
-                          {priorityRank != null ? ordinal(priorityRank) : "N/A"}
-                        </p>
-                      </div>
-
-                      <div className={styles.aiStatCard}>
                         <p className={styles.aiStatLabel}>Response window</p>
                         <p className={styles.aiStatValue}>{readableEscalation}</p>
-                      </div>
-
-                      <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Urgency score</p>
-                        <p className={styles.aiStatValue}>
-                          {urgencyPercent != null ? `${urgencyPercent}%` : "N/A"}
-                        </p>
                       </div>
 
                       <div className={styles.aiStatCard}>
@@ -723,8 +794,17 @@ export default async function AuthorityComplaintDetailPage({
                       </div>
 
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Duplicate matches</p>
-                        <p className={styles.aiStatValue}>{duplicateCount}</p>
+                        <p className={styles.aiStatLabel}>Priority score</p>
+                        <p className={styles.aiStatValue}>
+                          {ai?.priority_score != null ? ai.priority_score.toFixed(3) : "N/A"}
+                        </p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Priority state</p>
+                        <p className={styles.aiStatValue}>
+                          {priorityStatus || "Not available"}
+                        </p>
                       </div>
                     </div>
 
@@ -773,10 +853,16 @@ export default async function AuthorityComplaintDetailPage({
               <aside className={styles.rightColumn}>
                 <AuthorityActionPanel
                   complaintId={complaint.id}
+                  complaintTitle={complaint.title || "Complaint update"}
+                  reporterName={complaint.reporter_name || "Citizen"}
+                  areaText={areaText}
                   currentStatus={complaint.status}
                   currentResolutionNote={complaint.resolution_note}
                   resolvedAt={complaint.resolved_at}
                   currentFinalCategory={complaint.final_category}
+                  suggestedCategory={ai?.fusion_label || null}
+                  reliabilityStatus={reliabilityStatus}
+                  manualReviewRequired={manualReviewRequired}
                 />
               </aside>
             </div>

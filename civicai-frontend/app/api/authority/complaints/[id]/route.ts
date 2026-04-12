@@ -1,43 +1,129 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
-type ComplaintStatus = "submitted" | "processing" | "completed" | "resolved" | "rejected";
-
-type UpdateBody = {
-  status?: ComplaintStatus;
+type UpdateComplaintBody = {
+  status?: string;
   resolution_note?: string | null;
   final_category?: string | null;
+  notify_reporter?: boolean;
+  email_subject?: string | null;
+  email_text?: string | null;
 };
 
+const ALLOWED_STATUSES = new Set([
+  "submitted",
+  "processing",
+  "completed",
+  "resolved",
+  "rejected",
+]);
+
+function normalizeText(value: unknown) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+function isFinalStatus(status: string) {
+  return status === "completed" || status === "resolved" || status === "rejected";
+}
+
+function buildEmailFallback({
+  title,
+  areaText,
+  status,
+  finalCategory,
+  resolutionNote,
+}: {
+  title: string;
+  areaText: string;
+  status: string;
+  finalCategory: string;
+  resolutionNote: string | null;
+}) {
+  const readableStatus =
+    status === "processing"
+      ? "processing"
+      : status === "submitted"
+        ? "submitted"
+        : status === "resolved"
+          ? "resolved"
+          : status === "completed"
+            ? "completed"
+            : "rejected";
+
+  return `Hello,
+
+Your complaint "${title}" for ${areaText} has received a status update.
+
+Current status: ${readableStatus}
+Final category: ${finalCategory || "Not specified"}
+
+${
+  resolutionNote
+    ? `Authority note: ${resolutionNote}`
+    : "Please check the platform for the latest authority update."
+}
+
+Regards,
+CivicAI Authority Team`;
+}
+
+async function sendReporterEmail({
+  to,
+  subject,
+  text,
+}: {
+  to: string;
+  subject: string;
+  text: string;
+}) {
+  const senderEmail = process.env.GMAIL_SENDER_EMAIL;
+  const senderName = process.env.GMAIL_SENDER_NAME || "CivicAI Authority Team";
+  const appPassword = process.env.GMAIL_APP_PASSWORD;
+
+  if (!senderEmail || !appPassword) {
+    return {
+      sent: false,
+      skippedReason:
+        "Email configuration is missing. Add GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD to the frontend server environment.",
+    };
+  }
+
+  const nodemailer = await import("nodemailer");
+
+  const transporter = nodemailer.default.createTransport({
+    service: "gmail",
+    auth: {
+      user: senderEmail,
+      pass: appPassword,
+    },
+  });
+
+  const html = text
+    .split("\n")
+    .map((line) => `<p style="margin:0 0 12px 0;">${line || "&nbsp;"}</p>`)
+    .join("");
+
+  await transporter.sendMail({
+    from: `"${senderName}" <${senderEmail}>`,
+    to,
+    subject,
+    text,
+    html: `<div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.65;">${html}</div>`,
+  });
+
+  return { sent: true, skippedReason: null };
+}
+
 export async function PATCH(
-  req: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await context.params;
-    const body = (await req.json()) as UpdateBody;
-
-    const nextStatus = body.status;
-    const resolutionNoteRaw = body.resolution_note;
-    const finalCategoryRaw = body.final_category;
-
-    const resolutionNote =
-      typeof resolutionNoteRaw === "string" ? resolutionNoteRaw.trim() : null;
-
-    const finalCategory =
-      typeof finalCategoryRaw === "string" ? finalCategoryRaw.trim() : null;
-
-    if (
-      !nextStatus ||
-      !["submitted", "processing", "completed", "resolved", "rejected"].includes(nextStatus)
-    ) {
-      return NextResponse.json(
-        { error: "A valid status is required." },
-        { status: 400 }
-      );
-    }
-
     const cookieStore = await cookies();
 
     const supabase = createServerClient(
@@ -56,9 +142,10 @@ export async function PATCH(
 
     const {
       data: { user },
+      error: authError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
@@ -68,67 +155,187 @@ export async function PATCH(
       .eq("id", user.id)
       .single();
 
-    if (profileError || !profile) {
-      return NextResponse.json({ error: "Profile not found." }, { status: 403 });
-    }
-
-    if (!profile.is_verified || profile.role !== "authority") {
+    if (profileError || !profile?.is_verified || profile.role !== "authority") {
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
-    const updatePayload: {
-      status: ComplaintStatus;
-      updated_at: string;
-      resolved_at?: string | null;
-      resolution_note?: string | null;
-      final_category?: string | null;
-      category_source?: string;
-    } = {
-      status: nextStatus,
-      updated_at: new Date().toISOString(),
-    };
+    const body = (await request.json()) as UpdateComplaintBody;
 
-    if (nextStatus === "resolved" || nextStatus === "completed") {
-      updatePayload.resolved_at = new Date().toISOString();
-      updatePayload.resolution_note = resolutionNote || null;
-    } else {
-      updatePayload.resolved_at = null;
+    const nextStatus = normalizeText(body.status);
+    const nextResolutionNote =
+      body.resolution_note === undefined ? undefined : normalizeText(body.resolution_note);
+    const nextFinalCategory =
+      body.final_category === undefined ? undefined : normalizeText(body.final_category);
+    const notifyReporter = Boolean(body.notify_reporter);
+    const nextEmailSubject = normalizeText(body.email_subject);
+    const nextEmailText = normalizeText(body.email_text);
 
-      if (resolutionNoteRaw !== undefined) {
-        updatePayload.resolution_note = resolutionNote || null;
-      }
-    }
-
-    if (finalCategoryRaw !== undefined) {
-      updatePayload.final_category = finalCategory || null;
-      updatePayload.category_source = finalCategory ? "authority" : "authority";
-    }
-
-    const { data, error } = await supabase
-      .from("complaints")
-      .update(updatePayload)
-      .eq("id", id)
-      .select(
-        "id, status, resolved_at, resolution_note, updated_at, final_category, category_source"
-      )
-      .single();
-
-    if (error) {
+    if (!nextStatus || !ALLOWED_STATUSES.has(nextStatus)) {
       return NextResponse.json(
-        { error: `Failed to update complaint: ${error.message}` },
+        { error: "A valid complaint status is required." },
+        { status: 400 }
+      );
+    }
+
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      return NextResponse.json(
+        { error: "SUPABASE_SERVICE_ROLE_KEY is missing from server environment." },
         { status: 500 }
       );
     }
 
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceRoleKey,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+      }
+    );
+
+    const { data: complaintRow, error: complaintError } = await admin
+      .from("complaints")
+      .select(`
+        id,
+        title,
+        created_by,
+        reporter_name,
+        district,
+        upazila,
+        city_area,
+        address_label,
+        status,
+        final_category,
+        resolution_note,
+        resolved_at
+      `)
+      .eq("id", id)
+      .single();
+
+    if (complaintError || !complaintRow) {
+      return NextResponse.json({ error: "Complaint not found." }, { status: 404 });
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      status: nextStatus,
+    };
+
+    if (nextResolutionNote !== undefined) {
+      updatePayload.resolution_note = nextResolutionNote;
+    }
+
+    if (nextFinalCategory !== undefined) {
+      updatePayload.final_category = nextFinalCategory;
+      if (nextFinalCategory) {
+        updatePayload.category_source = "authority";
+      }
+    }
+
+    if (isFinalStatus(nextStatus)) {
+      updatePayload.resolved_at =
+        complaintRow.resolved_at || new Date().toISOString();
+    } else {
+      updatePayload.resolved_at = null;
+    }
+
+    const { data: updatedComplaint, error: updateError } = await admin
+      .from("complaints")
+      .update(updatePayload)
+      .eq("id", id)
+      .select(`
+        id,
+        status,
+        final_category,
+        resolution_note,
+        resolved_at
+      `)
+      .single();
+
+    if (updateError) {
+      return NextResponse.json(
+        { error: updateError.message || "Failed to update complaint." },
+        { status: 500 }
+      );
+    }
+
+    let emailSent = false;
+    let emailSkippedReason: string | null = null;
+
+    if (notifyReporter) {
+      const createdBy = complaintRow.created_by as string | null;
+
+      if (!createdBy) {
+        emailSkippedReason =
+          "Complaint reporter account could not be resolved for email delivery.";
+      } else {
+        const { data: reporterAuth, error: reporterError } =
+          await admin.auth.admin.getUserById(createdBy);
+
+        const reporterEmail = reporterAuth.user?.email ?? null;
+
+        if (reporterError || !reporterEmail) {
+          emailSkippedReason =
+            "Reporter email could not be loaded from Supabase Auth.";
+        } else {
+          const areaText =
+            complaintRow.city_area ||
+            complaintRow.upazila ||
+            complaintRow.district ||
+            complaintRow.address_label ||
+            "the reported area";
+
+          const fallbackSubject =
+            `CivicAI status update: ${nextStatus} - ${complaintRow.title || "Complaint"}`;
+
+          const fallbackText = buildEmailFallback({
+            title: complaintRow.title || "Complaint",
+            areaText,
+            status: nextStatus,
+            finalCategory:
+              nextFinalCategory ||
+              complaintRow.final_category ||
+              "Not specified",
+            resolutionNote:
+              nextResolutionNote === undefined
+                ? complaintRow.resolution_note
+                : nextResolutionNote,
+          });
+
+          try {
+            const emailResult = await sendReporterEmail({
+              to: reporterEmail,
+              subject: nextEmailSubject || fallbackSubject,
+              text: nextEmailText || fallbackText,
+            });
+
+            emailSent = emailResult.sent;
+            emailSkippedReason = emailResult.skippedReason;
+          } catch (emailError) {
+            emailSkippedReason =
+              emailError instanceof Error
+                ? emailError.message
+                : "Failed to send reporter email.";
+          }
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
-      complaint: data,
+      complaint: updatedComplaint,
+      email_sent: emailSent,
+      email_skipped_reason: emailSkippedReason,
     });
   } catch (error) {
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Unexpected server error.",
+          error instanceof Error
+            ? error.message
+            : "Unexpected error while updating complaint.",
       },
       { status: 500 }
     );

@@ -1082,9 +1082,14 @@ def update_complaint_sentiment_score(complaint_id: str, sentiment_score: float):
     
 def urgency_from_sentiment_exact(sentiment_score: float) -> float:
     """
-    Exact Rajkumar formula:
-        p_i = (s_i + 1) / 2
+    Urgency normalization used for CivicAI deployment:
+        U_i = (1 - s_i) / 2
     where s_i in [-1, 1].
+
+    Interpretation:
+    - very negative complaint text  -> urgency close to 1
+    - neutral complaint text        -> urgency around 0.5
+    - very positive complaint text  -> urgency close to 0
     """
     s_i = float(sentiment_score)
     if s_i < -1.0 or s_i > 1.0:
@@ -1092,7 +1097,7 @@ def urgency_from_sentiment_exact(sentiment_score: float) -> float:
             status_code=500,
             detail="Sentiment score must be in [-1, 1]."
         )
-    return safe_float((s_i + 1.0) / 2.0)
+    return safe_float((1.0 - s_i) / 2.0)
 
 
 def calculate_elapsed_hours(created_at_iso: str) -> float:
@@ -1544,12 +1549,12 @@ def calculate_priority_exact(
     current_fusion_confidence: float,
 ) -> Dict[str, Any]:
     """
-    Exact-priority path:
-    1) urgency from sentiment: p_i = (s_i + 1) / 2
-    2) SAW normalization and ranking over the active complaint pool
-    3) exact escalation condition based on elapsed time and unresolved status
-    4) frequency is included when CIVICAI_SAW_CRITERIA_JSON contains complaint_frequency
-    """
+Exact-priority path:
+1) urgency from sentiment: U_i = (1 - s_i) / 2
+2) SAW normalization and ranking over the active complaint pool
+3) exact escalation condition based on elapsed time and unresolved status
+4) frequency is included when CIVICAI_SAW_CRITERIA_JSON contains complaint_frequency
+"""
     try:
         criteria = get_saw_criteria()
         escalation_threshold_hours = get_escalation_threshold_hours()
