@@ -1600,6 +1600,77 @@ def get_saved_duplicate_ids_from_inference(
     model_versions = inference_row.get("model_versions") or {}
     return parse_string_list(model_versions.get("duplicate_ids"))
 
+def patch_inference_model_versions(complaint_id: str, patch_data: Dict[str, Any]):
+    existing_map = fetch_existing_inference_results_for_complaints([complaint_id])
+    existing_inf = existing_map.get(complaint_id)
+
+    merged_model_versions = dict((existing_inf or {}).get("model_versions") or {})
+    merged_model_versions.update(patch_data)
+
+    payload = {
+        "model_versions": serialize_model_versions(merged_model_versions),
+        "updated_at": iso(utc_now()),
+    }
+
+    if existing_inf:
+        params = {"complaint_id": f"eq.{complaint_id}"}
+        r = rest_patch("inference_results", payload, params=params)
+        if r.status_code not in (200, 204):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to patch inference model_versions for complaint {complaint_id}: {r.status_code} {r.text}"
+            )
+        return
+
+    insert_payload = {
+        "complaint_id": complaint_id,
+        **payload,
+    }
+    r = rest_post("inference_results", insert_payload)
+    if r.status_code not in (200, 201):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create inference row for complaint {complaint_id}: {r.status_code} {r.text}"
+        )
+
+
+def persist_duplicate_links_symmetrically(
+    complaint_id: str,
+    duplicate_ids: list[str],
+):
+    target_id = str(complaint_id)
+    clean_duplicate_ids = sorted({str(v) for v in duplicate_ids if str(v).strip() and str(v) != target_id})
+
+    patch_inference_model_versions(
+        target_id,
+        {
+            "duplicate_ids": clean_duplicate_ids,
+            "duplicate_count": len(clean_duplicate_ids),
+            "duplicate_text_threshold": DUPLICATE_TEXT_THRESHOLD,
+            "duplicate_location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
+            "duplicate_time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
+            "duplicate_saved_at": iso(utc_now()),
+        },
+    )
+
+    for other_id in clean_duplicate_ids:
+        other_map = fetch_existing_inference_results_for_complaints([other_id])
+        other_inf = other_map.get(other_id)
+        other_saved_ids = get_saved_duplicate_ids_from_inference(other_inf)
+
+        merged_other_ids = sorted({*other_saved_ids, target_id})
+        patch_inference_model_versions(
+            other_id,
+            {
+                "duplicate_ids": merged_other_ids,
+                "duplicate_count": len(merged_other_ids),
+                "duplicate_text_threshold": DUPLICATE_TEXT_THRESHOLD,
+                "duplicate_location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
+                "duplicate_time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
+                "duplicate_saved_at": iso(utc_now()),
+            },
+        )
+
 def get_text_embedding_cached(text: str) -> np.ndarray:
     clean = normalize_text(text)
     if not clean:
@@ -2334,6 +2405,20 @@ def run_ai_for_complaint(complaint_id: str):
     complaint_ids = [str(row.get("id")) for row in pool if row.get("id")]
     inference_map = fetch_existing_inference_results_for_complaints(complaint_ids)
 
+    duplicate_ids = detect_duplicates_for_complaint(
+    target_complaint=complaint,
+    all_open_complaints=pool,
+    text_threshold=DUPLICATE_TEXT_THRESHOLD,
+    location_radius_m=DUPLICATE_LOCATION_RADIUS_M,
+    time_window_hours=DUPLICATE_TIME_WINDOW_HOURS,
+    )
+    duplicate_count = len(duplicate_ids)
+
+    persist_duplicate_links_symmetrically(
+    complaint_id=complaint_id,
+    duplicate_ids=duplicate_ids,
+    )
+
     # Keep frequency + current complaint ranking, but do not do live duplicate
     # detection or global queue recompute inside the blocking AI request.
     frequency_score = compute_frequency_score(
@@ -2501,7 +2586,7 @@ def get_duplicates_for_complaint(
     complaint_id: str,
     refresh: bool = Query(
         False,
-        description="If true, recompute duplicates live. Otherwise return saved duplicate IDs from inference_results."
+        description="If true, recompute duplicates live and save them back into inference_results. Otherwise return saved duplicate IDs from inference_results."
     ),
 ):
     require_backend_env()
@@ -2530,7 +2615,7 @@ def get_duplicates_for_complaint(
     pool = get_open_complaint_rows(limit=500)
     pool = upsert_current_complaint_into_pool(pool, complaint)
 
-    duplicate_ids = detect_duplicates_for_complaint(
+    live_duplicate_ids = detect_duplicates_for_complaint(
         target_complaint=complaint,
         all_open_complaints=pool,
         text_threshold=DUPLICATE_TEXT_THRESHOLD,
@@ -2538,12 +2623,17 @@ def get_duplicates_for_complaint(
         time_window_hours=DUPLICATE_TIME_WINDOW_HOURS,
     )
 
+    persist_duplicate_links_symmetrically(
+        complaint_id=complaint_id,
+        duplicate_ids=live_duplicate_ids,
+    )
+
     return {
         "complaint_id": complaint_id,
-        "duplicate_count": len(duplicate_ids),
-        "duplicate_ids": duplicate_ids,
+        "duplicate_count": len(live_duplicate_ids),
+        "duplicate_ids": live_duplicate_ids,
         "text_threshold": DUPLICATE_TEXT_THRESHOLD,
         "location_radius_m": DUPLICATE_LOCATION_RADIUS_M,
         "time_window_hours": DUPLICATE_TIME_WINDOW_HOURS,
-        "source": "live_refresh",
+        "source": "live_refresh_saved",
     }

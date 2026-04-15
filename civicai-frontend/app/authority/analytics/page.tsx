@@ -119,6 +119,70 @@ function countMapToSortedList(
     }));
 }
 
+function parseDuplicateIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(String)
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+  }
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+
+    if (!raw || raw === "[]" || raw.toLowerCase() === "null") {
+      return [];
+    }
+
+    if (raw.startsWith("[") && raw.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map(String)
+            .map((v) => v.trim())
+            .filter(Boolean)
+            .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+        }
+      } catch {
+        // fall through to manual parsing
+      }
+    }
+
+    return raw
+      .split(",")
+      .map((v) =>
+        v
+          .trim()
+          .replace(/^\[/, "")
+          .replace(/\]$/, "")
+          .replace(/^"+|"+$/g, "")
+          .replace(/^'+|'+$/g, "")
+      )
+      .filter(Boolean)
+      .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+  }
+
+  return [];
+}
+
+function normalizeIdList(ids: string[]): string[] {
+  return Array.from(new Set(ids.map((v) => v.trim()).filter(Boolean)));
+}
+
+function getReciprocalDuplicateIds(
+  complaintId: string,
+  duplicateMap: Map<string, string[]>
+): string[] {
+  const ownIds = duplicateMap.get(complaintId) ?? [];
+
+  return ownIds.filter((otherId) => {
+    const otherIds = duplicateMap.get(otherId) ?? [];
+    return otherIds.includes(complaintId);
+  });
+}
+
 function buildComplaintsHref({
   status,
   review,
@@ -403,6 +467,8 @@ function ClusterGrid({ items }: { items: ClusterSummary[] }) {
   );
 }
 
+
+
 function DuplicateLinkedList({
   items,
 }: {
@@ -410,7 +476,7 @@ function DuplicateLinkedList({
     id: string;
     title: string;
     area: string;
-    duplicateOf: string;
+    duplicateIds: string[];
   }>;
 }) {
   if (items.length === 0) {
@@ -422,7 +488,7 @@ function DuplicateLinkedList({
       {items.map((item) => (
         <Link
           key={item.id}
-          href={buildComplaintsHref({ duplicate: "linked", duplicateOf: item.duplicateOf })}
+          href={buildComplaintsHref({ duplicate: "linked", duplicateOf: item.id })}
           className={styles.dashboardInboxItem}
         >
           <div className={styles.dashboardInboxItemTop}>
@@ -430,7 +496,8 @@ function DuplicateLinkedList({
             <span className={styles.chip}>Duplicate</span>
           </div>
           <p className={styles.dashboardInboxItemMeta}>
-            {item.area} • Linked to complaint {item.duplicateOf}
+            {item.area} • Matched with {item.duplicateIds.length} complaint
+            {item.duplicateIds.length > 1 ? "s" : ""}
           </p>
         </Link>
       ))}
@@ -449,8 +516,8 @@ export default async function AuthorityAnalyticsPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -530,6 +597,16 @@ export default async function AuthorityAnalyticsPage() {
     }
   }
 
+  const savedDuplicateMap = new Map<string, string[]>();
+
+  for (const complaint of complaints) {
+    const ai = inferenceByComplaint.get(complaint.id);
+    const duplicateIds = normalizeIdList(
+      parseDuplicateIds(ai?.model_versions?.duplicate_ids)
+    );
+    savedDuplicateMap.set(complaint.id, duplicateIds);
+  }
+
   const totalComplaints = complaints.length;
   const mappedComplaintCount = complaints.filter(
     (item) => item.lat != null && item.lng != null
@@ -583,7 +660,12 @@ export default async function AuthorityAnalyticsPage() {
       }
     }
 
-    if (complaint.duplicate_of) {
+    const reciprocalDuplicateIds = getReciprocalDuplicateIds(
+      complaint.id,
+      savedDuplicateMap
+    );
+
+    if (reciprocalDuplicateIds.length > 0) {
       duplicateLinkedCount += 1;
     }
 
@@ -640,14 +722,28 @@ export default async function AuthorityAnalyticsPage() {
     .sort((a, b) => b.count - a.count);
 
   const duplicateLinkedItems = complaints
-    .filter((item) => Boolean(item.duplicate_of))
-    .slice(0, 8)
-    .map((item) => ({
-      id: item.id,
-      title: item.title || "Untitled complaint",
-      area: getAreaName(item),
-      duplicateOf: item.duplicate_of || "",
-    }));
+    .map((item) => {
+      const reciprocalDuplicateIds = getReciprocalDuplicateIds(
+        item.id,
+        savedDuplicateMap
+      );
+
+      if (reciprocalDuplicateIds.length === 0) return null;
+
+      return {
+        id: item.id,
+        title: item.title || "Untitled complaint",
+        area: getAreaName(item),
+        duplicateIds: reciprocalDuplicateIds,
+      };
+    })
+    .filter((item): item is {
+      id: string;
+      title: string;
+      area: string;
+      duplicateIds: string[];
+    } => Boolean(item))
+    .slice(0, 8);
 
   const statusChartItems = [
     { label: "Submitted", count: submittedCount, share: 0 },
@@ -836,8 +932,16 @@ export default async function AuthorityAnalyticsPage() {
                 <MetricCard
                   label="Repeated clusters"
                   value={repeatedClusters.length}
-                  text="Opens the complaint queue using the future repeated-cluster filter."
-                  href={buildComplaintsHref({ cluster: "repeated" })}
+                  text={
+                    repeatedClusters.length > 0
+                      ? "Opens the complaint queue using the repeated-cluster filter."
+                      : "No saved cluster groups yet. Use repeated issue patterns for area-category recurrence."
+                  }
+                  href={
+                    repeatedClusters.length > 0
+                      ? buildComplaintsHref({ cluster: "repeated" })
+                      : buildComplaintsHref({ pattern: "repeated" })
+                  }
                 />
                 <MetricCard
                   label="Frequent / repeated issues"
