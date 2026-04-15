@@ -119,6 +119,22 @@ function countMapToSortedList(
     }));
 }
 
+function countMapToRepeatedList(
+  map: Map<string, number>,
+  total: number,
+  limit = 10
+): RankedItem[] {
+  return Array.from(map.entries())
+    .filter(([, count]) => count > 1)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: total > 0 ? (count / total) * 100 : 0,
+    }));
+}
+
 function parseDuplicateIds(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
@@ -356,6 +372,7 @@ function buildPatternHref(label: string) {
   return buildComplaintsHref({
     area: area || undefined,
     category: category || undefined,
+    pattern: "repeated",
   });
 }
 
@@ -501,6 +518,39 @@ function DuplicateLinkedList({
           </p>
         </Link>
       ))}
+    </div>
+  );
+}
+
+function RepeatedPatternList({ items }: { items: RankedItem[] }) {
+  if (items.length === 0) {
+    return <div className={styles.emptyBox}>No repeated area-category patterns available.</div>;
+  }
+
+  return (
+    <div className={styles.dashboardInboxList}>
+      {items.map((item) => {
+        const parts = item.label.split(" — ");
+        const area = parts[0]?.trim() || "Unknown area";
+        const category = parts.slice(1).join(" — ").trim() || "Uncategorized";
+
+        return (
+          <Link
+            key={item.label}
+            href={buildPatternHref(item.label)}
+            className={styles.dashboardInboxItem}
+          >
+            <div className={styles.dashboardInboxItemTop}>
+              <h4 className={styles.dashboardInboxItemTitle}>{category}</h4>
+              <span className={styles.chip}>Repeated pattern</span>
+            </div>
+
+            <p className={styles.dashboardInboxItemMeta}>
+              {area} • {item.count} matching complaints
+            </p>
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -711,7 +761,7 @@ export default async function AuthorityAnalyticsPage() {
 
   const topCategories = countMapToSortedList(categoryCounts, totalComplaints, 10);
   const topAreas = countMapToSortedList(areaCounts, totalComplaints, 10);
-  const repeatedPatterns = countMapToSortedList(
+  const repeatedPatterns = countMapToRepeatedList(
     repeatedPatternCounts,
     totalComplaints,
     10
@@ -930,7 +980,7 @@ export default async function AuthorityAnalyticsPage() {
                   href={buildComplaintsHref({ duplicate: "linked" })}
                 />
                 <MetricCard
-                  label="Repeated clusters"
+                  label="Saved AI cluster groups"
                   value={repeatedClusters.length}
                   text={
                     repeatedClusters.length > 0
@@ -944,7 +994,7 @@ export default async function AuthorityAnalyticsPage() {
                   }
                 />
                 <MetricCard
-                  label="Frequent / repeated issues"
+                  label="Repeated area-category patterns"
                   value={repeatedPatterns.length}
                   text="Opens the complaint queue using the future repeated-issue filter."
                   href={buildComplaintsHref({ pattern: "repeated" })}
@@ -1051,22 +1101,24 @@ export default async function AuthorityAnalyticsPage() {
             <section className={styles.section} id="repeated-patterns">
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Frequent / repeated issue patterns</h2>
+                  <h2 className={styles.sectionTitle}>Repeated area-category patterns</h2>
                   <p className={styles.sectionText}>
                     Click a repeated pattern card to open complaints filtered by both area and category.
                   </p>
                 </div>
               </div>
 
-              <MiniCardGrid items={repeatedPatterns} type="pattern" />
+              <article className={styles.dashboardInboxCard}>
+                <RepeatedPatternList items={repeatedPatterns} />
+              </article>
             </section>
 
             <section className={styles.section} id="repeated-clusters">
               <div className={styles.sectionHeader}>
                 <div>
-                  <h2 className={styles.sectionTitle}>Repeated cluster groups</h2>
+                  <h2 className={styles.sectionTitle}>Saved AI cluster groups</h2>
                   <p className={styles.sectionText}>
-                    Cluster cards now carry future queue filter parameters for repeated-cluster review.
+                    Saved cluster groups appear here only when complaints share a real cluster ID.
                   </p>
                 </div>
               </div>
@@ -1079,7 +1131,7 @@ export default async function AuthorityAnalyticsPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Duplicate-linked complaints</h2>
                   <p className={styles.sectionText}>
-                    These links now carry future duplicate filter parameters into the complaint queue.
+                    Complaints shown here have reciprocal saved duplicate links.
                   </p>
                 </div>
               </div>

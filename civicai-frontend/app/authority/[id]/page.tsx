@@ -27,6 +27,7 @@ type ComplaintDetail = {
   user_category: string | null;
   final_category: string | null;
   category_source: string | null;
+  cluster_id: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -57,6 +58,42 @@ type InferenceRow = {
   created_at: string | null;
   updated_at: string | null;
 };
+
+type PatternComplaintRow = {
+  id: string;
+  title: string | null;
+  status: string;
+  created_at: string;
+  district: string | null;
+  upazila: string | null;
+  city_area: string | null;
+  user_category: string | null;
+  final_category: string | null;
+  cluster_id: string | null;
+};
+
+type PatternInferenceRow = {
+  complaint_id: string;
+  fusion_label: string | null;
+  model_versions: ModelVersions | null;
+};
+
+function normalizePatternText(value?: string | null) {
+  return (value || "Unknown").trim().toLowerCase();
+}
+
+function getPatternArea(row: {
+  city_area: string | null;
+  upazila: string | null;
+  district: string | null;
+}) {
+  return row.city_area || row.upazila || row.district || "Unknown";
+}
+
+function getModelClusterId(modelVersions?: ModelVersions | null) {
+  const value = modelVersions?.cluster_id;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("en-BD", {
@@ -319,8 +356,8 @@ export default async function AuthorityComplaintDetailPage({
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -368,7 +405,8 @@ export default async function AuthorityComplaintDetailPage({
       created_at,
       user_category,
       final_category,
-      category_source
+      category_source,
+cluster_id
     `)
     .eq("id", id)
     .single();
@@ -462,8 +500,72 @@ export default async function AuthorityComplaintDetailPage({
 
   const savedDuplicateIds = parseStringArray(modelVersions?.duplicate_ids);
   const duplicateCount = savedDuplicateIds.length;
+
   const finalOperationalCategory =
     complaint.final_category || ai?.fusion_label || complaint.user_category || "Not set";
+
+  const currentSavedClusterId =
+    complaint.cluster_id || getModelClusterId(modelVersions);
+
+  const currentPatternArea = getPatternArea(complaint);
+
+  const currentPatternKey = `${normalizePatternText(
+    currentPatternArea
+  )}__${normalizePatternText(finalOperationalCategory)}`;
+
+  const { data: patternComplaintRowsData } = await supabase
+    .from("complaints")
+    .select(`
+    id,
+    title,
+    status,
+    created_at,
+    district,
+    upazila,
+    city_area,
+    user_category,
+    final_category,
+    cluster_id
+  `);
+
+  const patternComplaints = (patternComplaintRowsData ?? []) as PatternComplaintRow[];
+  const patternComplaintIds = patternComplaints.map((item) => item.id);
+
+  const patternInferenceByComplaint = new Map<string, PatternInferenceRow>();
+
+  if (patternComplaintIds.length > 0) {
+    const { data: patternInferenceRowsData } = await supabase
+      .from("inference_results")
+      .select("complaint_id, fusion_label, model_versions")
+      .in("complaint_id", patternComplaintIds);
+
+    for (const row of (patternInferenceRowsData ?? []) as PatternInferenceRow[]) {
+      patternInferenceByComplaint.set(row.complaint_id, row);
+    }
+  }
+
+  const repeatedPatternMatches = patternComplaints.filter((item) => {
+    if (item.id === complaint.id) return false;
+
+    const itemAi = patternInferenceByComplaint.get(item.id);
+    const itemCategory =
+      item.final_category || itemAi?.fusion_label || item.user_category || "Uncategorized";
+
+    const itemKey = `${normalizePatternText(getPatternArea(item))}__${normalizePatternText(
+      itemCategory
+    )}`;
+
+    return itemKey === currentPatternKey;
+  });
+
+  const savedClusterMatches = currentSavedClusterId
+    ? patternComplaints.filter((item) => {
+      if (item.id === complaint.id) return false;
+      const itemAi = patternInferenceByComplaint.get(item.id);
+      const itemClusterId = item.cluster_id || getModelClusterId(itemAi?.model_versions);
+      return itemClusterId === currentSavedClusterId;
+    })
+    : [];
 
   const readableConfidence = confidenceLabel(ai?.fusion_confidence);
   const readableEscalation = friendlyEscalation(escalationStatus);
@@ -476,6 +578,14 @@ export default async function AuthorityComplaintDetailPage({
     ai?.image_confidences
   );
 
+  const readableTextModelResult = ai?.text_label
+    ? `${humanizeValue(ai.text_label)} (${nicePercent(ai.text_confidence)})`
+    : "Not available";
+
+  const readableFusionResult = ai?.fusion_label
+    ? `${humanizeValue(ai.fusion_label)} (${nicePercent(ai.fusion_confidence)})`
+    : "Not available";
+
   const urgencyNote = urgencyExplanation(
     urgencyScoreRaw,
     ai?.fusion_confidence ?? null,
@@ -487,8 +597,8 @@ export default async function AuthorityComplaintDetailPage({
     priorityStatus === "computed"
       ? priorityRank != null
         ? `This complaint is currently ranked ${ordinal(
-            priorityRank
-          )} among submitted complaints waiting for first authority review.`
+          priorityRank
+        )} among submitted complaints waiting for first authority review.`
         : "Priority was computed for this complaint."
       : priorityReason || "Priority could not be computed.";
 
@@ -668,6 +778,15 @@ export default async function AuthorityComplaintDetailPage({
                         <p className={styles.kvLabel}>AI suggested category</p>
                         <p className={styles.kvValue}>{humanizeValue(ai?.fusion_label)}</p>
                       </div>
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Text model result</p>
+                        <p className={styles.kvValue}>{readableTextModelResult}</p>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Fusion result</p>
+                        <p className={styles.kvValue}>{readableFusionResult}</p>
+                      </div>
 
                       <div className={styles.infoBox}>
                         <p className={styles.kvLabel}>Final operational category</p>
@@ -771,8 +890,18 @@ export default async function AuthorityComplaintDetailPage({
                   <div className={styles.panelBody}>
                     <div className={styles.aiStatGrid}>
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Suggested category</p>
-                        <p className={styles.aiStatValue}>{humanizeValue(ai?.fusion_label)}</p>
+                        <p className={styles.aiStatLabel}>Text model</p>
+                        <p className={styles.aiStatValue}>{readableTextModelResult}</p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Fusion model</p>
+                        <p className={styles.aiStatValue}>{readableFusionResult}</p>
+                      </div>
+
+                      <div className={styles.aiStatCard}>
+                        <p className={styles.aiStatLabel}>Image model</p>
+                        <p className={styles.aiStatValue}>{readableVisualEvidence}</p>
                       </div>
 
                       <div className={styles.aiStatCard}>
@@ -783,13 +912,13 @@ export default async function AuthorityComplaintDetailPage({
                       </div>
 
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Visual evidence</p>
-                        <p className={styles.aiStatValue}>{readableVisualEvidence}</p>
+                        <p className={styles.aiStatLabel}>Saved duplicates</p>
+                        <p className={styles.aiStatValue}>{duplicateCount}</p>
                       </div>
 
                       <div className={styles.aiStatCard}>
-                        <p className={styles.aiStatLabel}>Saved duplicate matches</p>
-                        <p className={styles.aiStatValue}>{duplicateCount}</p>
+                        <p className={styles.aiStatLabel}>Repeated pattern</p>
+                        <p className={styles.aiStatValue}>{repeatedPatternMatches.length}</p>
                       </div>
                     </div>
 
@@ -856,6 +985,49 @@ export default async function AuthorityComplaintDetailPage({
                   </div>
                 </article>
 
+                <article className={styles.panel}>
+                  <h2 className={styles.panelTitle}>Repeated issue context</h2>
+
+                  <div className={styles.panelBody}>
+                    <div className={styles.infoBox}>
+                      <p className={styles.kvLabel}>Saved backend cluster</p>
+                      <p className={styles.kvValue}>
+                        {currentSavedClusterId
+                          ? `${savedClusterMatches.length} other complaint(s) share the saved cluster ID.`
+                          : "No saved backend cluster ID is available for this complaint yet."}
+                      </p>
+                    </div>
+
+                    <div className={styles.infoBox}>
+                      <p className={styles.kvLabel}>Repeated issue pattern</p>
+                      <p className={styles.kvValue}>
+                        {repeatedPatternMatches.length > 0
+                          ? `${repeatedPatternMatches.length} other complaint(s) share the same area and category pattern.`
+                          : "No repeated area-category pattern was found for this complaint."}
+                      </p>
+                    </div>
+
+                    {repeatedPatternMatches.length > 0 ? (
+                      <div className={styles.kvGrid}>
+                        {repeatedPatternMatches.slice(0, 6).map((item) => (
+                          <div key={item.id} className={styles.infoBox}>
+                            <p className={styles.kvLabel}>
+                              Matched complaint • {humanizeValue(item.status)}
+                            </p>
+
+                            <p className={styles.kvValue}>
+                              {item.title || "Untitled complaint"}
+                            </p>
+
+                            <Link href={`/authority/${item.id}`} className={styles.secondaryLink}>
+                              Open matched complaint
+                            </Link>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
                 <article className={styles.panel}>
                   <h2 className={styles.panelTitle}>
                     Possible duplicates {duplicateCount > 0 ? `(${duplicateCount})` : ""}

@@ -453,6 +453,26 @@ export default async function AuthorityComplaintsPage({
     );
   }
 
+  const categoryOptions = Array.from(
+    new Set(
+      complaints
+        .map((complaint) => {
+          const ai = inferenceByComplaint.get(complaint.id);
+          return (
+            complaint.final_category ||
+            ai?.fusion_label ||
+            complaint.user_category ||
+            "Uncategorized"
+          );
+        })
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const areaOptions = Array.from(
+    new Set(complaints.map((complaint) => getAreaName(complaint)).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
   const filteredComplaints = complaints.filter((complaint) => {
     const ai = inferenceByComplaint.get(complaint.id);
     const reliability = ai?.model_versions?.reliability_status ?? null;
@@ -523,9 +543,8 @@ export default async function AuthorityComplaintsPage({
     const matchesCluster =
       !selectedCluster ||
       (selectedCluster === "repeated" &&
-        ((effectiveClusterId &&
-          (clusterCounts.get(effectiveClusterId) ?? 0) > 1) ||
-          isRepeatedPattern));
+        Boolean(effectiveClusterId) &&
+        (clusterCounts.get(effectiveClusterId ?? "") ?? 0) > 1);
 
     const matchesClusterId =
       !selectedClusterId || effectiveClusterId === selectedClusterId;
@@ -581,6 +600,14 @@ export default async function AuthorityComplaintsPage({
     const ai = inferenceByComplaint.get(item.id);
     const effectiveClusterId = getEffectiveClusterId(item, ai);
 
+    return Boolean(
+      effectiveClusterId && (clusterCounts.get(effectiveClusterId) ?? 0) > 1
+    );
+  }).length;
+
+  const repeatedPatternCount = filteredComplaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+
     const derivedCategory =
       item.final_category ||
       ai?.fusion_label ||
@@ -590,11 +617,7 @@ export default async function AuthorityComplaintsPage({
     const derivedArea = getAreaName(item);
     const pairKey = `${derivedArea}__${derivedCategory}`;
 
-    return (
-      (effectiveClusterId &&
-        (clusterCounts.get(effectiveClusterId) ?? 0) > 1) ||
-      (repeatedPatternCounts.get(pairKey) ?? 0) > 1
-    );
+    return (repeatedPatternCounts.get(pairKey) ?? 0) > 1;
   }).length;
 
   const prevPage = safePage > 1 ? safePage - 1 : null;
@@ -706,7 +729,14 @@ export default async function AuthorityComplaintsPage({
                 <div className={styles.statMiniCard}>
                   <p className={styles.statMiniLabel}>Repeated clusters</p>
                   <h3 className={styles.statMiniValue}>{repeatedClusterCount}</h3>
-                  <p className={styles.statMiniText}>Complaints grouped into repeated cluster cases.</p>
+                  <p className={styles.statMiniText}>Complaints with saved cluster IDs.</p>                </div>
+
+                <div className={styles.statMiniCard}>
+                  <p className={styles.statMiniLabel}>Repeated patterns</p>
+                  <h3 className={styles.statMiniValue}>{repeatedPatternCount}</h3>
+                  <p className={styles.statMiniText}>
+                    Area-category complaint patterns repeated in this view.
+                  </p>
                 </div>
               </div>
             </section>
@@ -792,24 +822,26 @@ export default async function AuthorityComplaintsPage({
 
                   <div>
                     <label className={styles.label}>Category</label>
-                    <input
-                      type="text"
-                      name="category"
-                      defaultValue={selectedCategory}
-                      placeholder="Streetlights, Garbage, Roads..."
-                      className={styles.input}
-                    />
+                    <select name="category" defaultValue={selectedCategory} className={styles.input}>
+                      <option value="">All categories</option>
+                      {categoryOptions.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
                     <label className={styles.label}>Area</label>
-                    <input
-                      type="text"
-                      name="area"
-                      defaultValue={selectedArea}
-                      placeholder="Mirpur, Dhanmondi, Gulshan..."
-                      className={styles.input}
-                    />
+                    <select name="area" defaultValue={selectedArea} className={styles.input}>
+                      <option value="">All areas</option>
+                      {areaOptions.map((area) => (
+                        <option key={area} value={area}>
+                          {area}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
@@ -844,26 +876,36 @@ export default async function AuthorityComplaintsPage({
                       <option value="reliable">Reliable AI result</option>
                     </select>
                   </div>
+
+                  <div>
+                    <label className={styles.label}>Duplicate</label>
+                    <select name="duplicate" defaultValue={selectedDuplicate} className={styles.input}>
+                      <option value="">All complaints</option>
+                      <option value="linked">Duplicate linked</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={styles.label}>Cluster / repeated</label>
+                    <select name="pattern" defaultValue={selectedPattern} className={styles.input}>
+                      <option value="">All complaints</option>
+                      <option value="repeated">Repeated issue pattern</option>
+                    </select>
+                  </div>
                 </div>
 
                 {sourceContext ? (
                   <input type="hidden" name="source" value={sourceContext} />
                 ) : null}
-                {selectedDuplicate ? (
-                  <input type="hidden" name="duplicate" value={selectedDuplicate} />
-                ) : null}
+
                 {selectedDuplicateOf ? (
                   <input type="hidden" name="duplicateOf" value={selectedDuplicateOf} />
                 ) : null}
-                {selectedCluster ? (
-                  <input type="hidden" name="cluster" value={selectedCluster} />
-                ) : null}
+
                 {selectedClusterId ? (
                   <input type="hidden" name="clusterId" value={selectedClusterId} />
                 ) : null}
-                {selectedPattern ? (
-                  <input type="hidden" name="pattern" value={selectedPattern} />
-                ) : null}
+
 
                 <div className={styles.complaintsFilterActions}>
                   <button type="submit" className={styles.primaryButton}>
@@ -913,10 +955,10 @@ export default async function AuthorityComplaintsPage({
                     const effectiveClusterId = getEffectiveClusterId(complaint, ai);
                     const pairKey = `${getAreaName(complaint)}__${finalCategory}`;
 
-                    const isRepeatedCluster =
-                      (effectiveClusterId &&
-                        (clusterCounts.get(effectiveClusterId) ?? 0) > 1) ||
-                      (repeatedPatternCounts.get(pairKey) ?? 0) > 1;
+                    const isSavedCluster =
+                      Boolean(effectiveClusterId && (clusterCounts.get(effectiveClusterId) ?? 0) > 1);
+
+                    const isRepeatedPattern = (repeatedPatternCounts.get(pairKey) ?? 0) > 1;
 
                     return (
                       <article key={complaint.id} className={styles.complaintsManagementRow}>
@@ -957,8 +999,10 @@ export default async function AuthorityComplaintsPage({
                             {savedDuplicateIds.length > 0 ? (
                               <span className={styles.chipWarn}>Duplicate linked</span>
                             ) : null}
-                            {isRepeatedCluster ? (
+                            {isSavedCluster ? (
                               <span className={styles.chipWarn}>Repeated cluster</span>
+                            ) : isRepeatedPattern ? (
+                              <span className={styles.chipWarn}>Repeated issue pattern</span>
                             ) : null}
                           </div>
                         </div>

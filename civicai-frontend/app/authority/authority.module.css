@@ -2102,3 +2102,26 @@
     justify-content: flex-start;
   }
 }
+
+.aiStatValue {
+  font-size: clamp(1rem, 1.4vw, 1.35rem);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.aiStatCard {
+  min-height: auto;
+  padding: 1rem;
+}
+
+.panel {
+  margin-bottom: 1.25rem;
+}
+
+.panelBody {
+  gap: 1rem;
+}
+
+.kvValue {
+  line-height: 1.55;
+}
