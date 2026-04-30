@@ -52,7 +52,7 @@ export async function GET(
     const backendBase =
       process.env.BACKEND_URL ||
       process.env.NEXT_PUBLIC_BACKEND_URL ||
-      "http://127.0.0.1:8000";
+      process.env.NEXT_PUBLIC_API_BASE_URL!;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);

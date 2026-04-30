@@ -238,7 +238,7 @@ export default function ReportForm({ userId }: { userId: string }) {
 
   async function triggerAiInference(complaintId: string) {
     try {
-      await fetch(`http://127.0.0.1:8000/ai/run/${complaintId}`, {
+      await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/ai/run/${complaintId}`, {
         method: "POST",
         keepalive: true,
       });
