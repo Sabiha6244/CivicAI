@@ -23,6 +23,8 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
+from hf_model_loader import get_hf_model_paths
+
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 load_dotenv()
@@ -155,6 +157,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+try:
+    text_model_dir_str, yolo_model_path_str = get_hf_model_paths()
+    TEXT_MODEL_DIR = Path(text_model_dir_str)
+    YOLO_MODEL_PATH = Path(yolo_model_path_str)
+    TEXT_META_PATH = TEXT_MODEL_DIR / "meta.json"
+
+    print(f"[HF] Text model dir: {TEXT_MODEL_DIR}")
+    print(f"[HF] YOLO model path: {YOLO_MODEL_PATH}")
+except Exception as e:
+    print(f"[HF] Download failed, using local fallback. Reason: {e}")
+    TEXT_MODEL_DIR = Path("models") / "text_model"
+    YOLO_MODEL_PATH = Path("models") / "yolo" / "best.pt"
+    TEXT_META_PATH = TEXT_MODEL_DIR / "meta.json"
 
 @app.on_event("startup")
 def preload_ai_models():
