@@ -10,6 +10,8 @@ import {
 } from "react-leaflet";
 import styles from "./report.module.css";
 
+import * as L from "leaflet";
+
 
 const MapContainerAny = MapContainer as any;
 const TileLayerAny = TileLayer as any;
@@ -85,12 +87,32 @@ function AreaCenterMover({
   return null;
 }
 
+let leafletMarkerFixed = false;
+
+
+function fixLeafletMarkerIcon() {
+  if (leafletMarkerFixed) return;
+  leafletMarkerFixed = true;
+
+  const DefaultIcon = (L as any).Icon.Default;
+  delete DefaultIcon.prototype._getIconUrl;
+
+  DefaultIcon.mergeOptions({
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    iconRetinaUrl:
+      "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  });
+}
 export default function LocationPicker({
   lat,
   lng,
   areaCenter,
   onChange,
 }: LocationPickerProps) {
+  useEffect(() => {
+    fixLeafletMarkerIcon();
+  }, []);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<"current" | "manual" | null>(null);
