@@ -41,6 +41,10 @@ GMAIL_SENDER_EMAIL = os.getenv("GMAIL_SENDER_EMAIL", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 GMAIL_SENDER_NAME = os.getenv("GMAIL_SENDER_NAME", "CivicAI")
 
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL")
+BREVO_SENDER_NAME = os.getenv("BREVO_SENDER_NAME", "CivicAI")
+
 INFERENCE_IMAGE_BUCKET = os.getenv("SUPABASE_INFERENCE_IMAGE_BUCKET", "complaint-images")
 
 SENTIMENT_ANALYZER = SentimentIntensityAnalyzer()
@@ -385,32 +389,46 @@ def get_saw_criteria() -> list[SawCriterion]:
 
 
 # ---------- email ----------
-def send_email_gmail(to_email: str, subject: str, html_content: str, text_content: str):
-    if not GMAIL_SENDER_EMAIL or not GMAIL_APP_PASSWORD:
+# ---------- email ----------
+def send_email_brevo(to_email: str, subject: str, html_content: str, text_content: str):
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
         raise HTTPException(
             status_code=500,
-            detail="Gmail environment variables are not configured."
+            detail="Brevo environment variables are not configured."
         )
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"{GMAIL_SENDER_NAME} <{GMAIL_SENDER_EMAIL}>"
-    msg["To"] = to_email
-
-    msg.set_content(text_content)
-    msg.add_alternative(html_content, subtype="html")
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "api-key": BREVO_API_KEY,
+    }
+    payload = {
+        "sender": {
+            "name": BREVO_SENDER_NAME or "CivicAI",
+            "email": BREVO_SENDER_EMAIL,
+        },
+        "to": [
+            {"email": to_email}
+        ],
+        "subject": subject,
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
-            server.starttls()
-            server.login(GMAIL_SENDER_EMAIL, GMAIL_APP_PASSWORD)
-            server.send_message(msg)
-    except Exception as e:
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+    except requests.RequestException as e:
         raise HTTPException(
             status_code=500,
             detail=f"Email delivery failed: {str(e)}"
         )
 
+    if r.status_code >= 300:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Email delivery failed: {r.status_code} {r.text}"
+        )
 
 # ---------- supabase otp ----------
 def sb_deactivate_active_otps(user_id: str):
@@ -2309,7 +2327,7 @@ def otp_send(body: SendOtpReq):
     """
 
     try:
-        send_email_gmail(body.email, subject, html, text)
+        send_email_brevo(body.email, subject, html, text)
     except HTTPException:
         latest_row = sb_get_latest_active_otp(body.user_id)
         if latest_row:

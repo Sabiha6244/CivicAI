@@ -61,15 +61,19 @@ Your complaint "${title}" for ${areaText} has received a status update.
 Current status: ${readableStatus}
 Final category: ${finalCategory || "Not specified"}
 
-${
-  resolutionNote
-    ? `Authority note: ${resolutionNote}`
-    : "Please check the platform for the latest authority update."
-}
+${resolutionNote
+      ? `Authority note: ${resolutionNote}`
+      : "Please check the platform for the latest authority update."
+    }
 
 Regards,
 CivicAI Authority Team`;
 }
+
+type ReporterEmailResult = {
+  sent: boolean;
+  skippedReason?: string;
+};
 
 async function sendReporterEmail({
   to,
@@ -79,43 +83,64 @@ async function sendReporterEmail({
   to: string;
   subject: string;
   text: string;
-}) {
-  const senderEmail = process.env.GMAIL_SENDER_EMAIL;
-  const senderName = process.env.GMAIL_SENDER_NAME || "CivicAI Authority Team";
-  const appPassword = process.env.GMAIL_APP_PASSWORD;
+}): Promise<ReporterEmailResult> {
+  const apiKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.BREVO_SENDER_EMAIL;
+  const senderName =
+    process.env.BREVO_SENDER_NAME || "CivicAI Authority Team";
 
-  if (!senderEmail || !appPassword) {
+  if (!senderEmail || !apiKey) {
     return {
       sent: false,
       skippedReason:
-        "Email configuration is missing. Add GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD to the frontend server environment.",
+        "Email configuration is missing. Add BREVO_API_KEY and BREVO_SENDER_EMAIL to the frontend server environment.",
     };
   }
 
-  const nodemailer = await import("nodemailer");
-
-  const transporter = nodemailer.default.createTransport({
-    service: "gmail",
-    auth: {
-      user: senderEmail,
-      pass: appPassword,
-    },
-  });
+  const escapeHtml = (value: string) =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
 
   const html = text
     .split("\n")
-    .map((line) => `<p style="margin:0 0 12px 0;">${line || "&nbsp;"}</p>`)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
     .join("");
 
-  await transporter.sendMail({
-    from: `"${senderName}" <${senderEmail}>`,
-    to,
-    subject,
-    text,
-    html: `<div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.65;">${html}</div>`,
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "api-key": apiKey,
+    },
+    body: JSON.stringify({
+      sender: {
+        name: senderName,
+        email: senderEmail,
+      },
+      to: [{ email: to }],
+      subject,
+      textContent: text,
+      htmlContent: html,
+    }),
+    cache: "no-store",
   });
 
-  return { sent: true, skippedReason: null };
+  if (!response.ok) {
+    return {
+      sent: false,
+      skippedReason: `Brevo send failed: ${response.status} ${await response.text()}`,
+    };
+  }
+
+  return {
+    sent: true,
+    skippedReason: undefined,
+  };
 }
 
 async function recomputePriorityQueue() {
@@ -192,8 +217,8 @@ export async function PATCH(
           get(name: string) {
             return cookieStore.get(name)?.value;
           },
-          set() {},
-          remove() {},
+          set() { },
+          remove() { },
         },
       }
     );
@@ -375,7 +400,7 @@ export async function PATCH(
             });
 
             emailSent = emailResult.sent;
-            emailSkippedReason = emailResult.skippedReason;
+            emailSkippedReason = emailResult.skippedReason ?? null;
           } catch (emailError) {
             emailSkippedReason =
               emailError instanceof Error
