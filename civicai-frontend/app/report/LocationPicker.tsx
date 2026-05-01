@@ -8,8 +8,9 @@ import {
   useMap,
   useMapEvents,
 } from "react-leaflet";
-import { icon, type LatLngTuple } from "leaflet";
 import styles from "./report.module.css";
+
+type LatLngTuple = [number, number];
 
 type LocationPickerProps = {
   lat: number | null;
@@ -22,13 +23,7 @@ type LocationPickerProps = {
   onChange: (lat: number, lng: number) => void;
 };
 
-const markerIcon = icon({
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  iconSize: [25, 41] as [number, number],
-  iconAnchor: [12, 41] as [number, number],
-});
+
 
 function ClickHandler({
   onSelectManualLocation,
@@ -165,15 +160,15 @@ export default function LocationPicker({
     lat === null || lng === null
       ? "No location selected yet."
       : selectionMode === "current"
-      ? "Current location selected."
-      : "Problem location selected on map.";
+        ? "Current location selected."
+        : "Problem location selected on map.";
 
   const locationHelp =
     lat === null || lng === null
       ? "After selecting division and district, the map will move to that area. Then click the exact complaint location on the map."
       : selectionMode === "current"
-      ? "If the problem is somewhere else, choose 'Mark another location on map' and click the correct place."
-      : "If this is not the correct place, click another point on the map.";
+        ? "If the problem is somewhere else, choose 'Mark another location on map' and click the correct place."
+        : "If this is not the correct place, click another point on the map.";
 
   const markerPosition: LatLngTuple | null =
     lat !== null && lng !== null ? [lat, lng] : null;
@@ -217,7 +212,7 @@ export default function LocationPicker({
         <ClickHandler onSelectManualLocation={handleManualSelection} />
         <AreaCenterMover areaCenter={areaCenter} lat={lat} lng={lng} />
         <SelectedPointMover lat={lat} lng={lng} />
-        {markerPosition ? <Marker position={markerPosition} icon={markerIcon} /> : null}
+        {markerPosition ? <Marker position={markerPosition} /> : null}
       </MapContainer>
 
       {locationError ? (
