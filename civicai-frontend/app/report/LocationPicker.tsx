@@ -10,6 +10,11 @@ import {
 } from "react-leaflet";
 import styles from "./report.module.css";
 
+
+const MapContainerAny = MapContainer as any;
+const TileLayerAny = TileLayer as any;
+const MarkerAny = Marker as any;
+
 type LatLngTuple = [number, number];
 
 type LocationPickerProps = {
@@ -31,7 +36,7 @@ function ClickHandler({
   onSelectManualLocation: (lat: number, lng: number) => void;
 }) {
   useMapEvents({
-    click(e) {
+    click(e: any) {
       onSelectManualLocation(e.latlng.lat, e.latlng.lng);
     },
   });
@@ -199,13 +204,13 @@ export default function LocationPicker({
         <div className={styles.locationStatusText}>{locationHelp}</div>
       </div>
 
-      <MapContainer
+      <MapContainerAny
         center={defaultCenter}
         zoom={defaultZoom}
         scrollWheelZoom={true}
         className={styles.locationMapFrame}
       >
-        <TileLayer
+        <TileLayerAny
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
@@ -213,7 +218,7 @@ export default function LocationPicker({
         <AreaCenterMover areaCenter={areaCenter} lat={lat} lng={lng} />
         <SelectedPointMover lat={lat} lng={lng} />
         {markerPosition ? <Marker position={markerPosition} /> : null}
-      </MapContainer>
+      </MapContainerAny>
 
       {locationError ? (
         <div className={styles.locationError}>{locationError}</div>
