@@ -2,6 +2,11 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabaseServer";
 import ReportForm from "./ReportForm";
 
+type ProfileRow = {
+  full_name: string | null;
+  is_verified: boolean | null;
+};
+
 export default async function ReportPage() {
   const supabase = await createClient();
 
@@ -16,13 +21,20 @@ export default async function ReportPage() {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("is_verified")
+    .select("full_name, is_verified")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (profileError || !profile?.is_verified) {
+  const userProfile = profile as ProfileRow | null;
+
+  if (profileError || !userProfile?.is_verified) {
     redirect("/login?next=/report&verify=1");
   }
 
-  return <ReportForm userId={user.id} />;
+  return (
+    <ReportForm
+      userId={user.id}
+      defaultReporterName={userProfile.full_name ?? ""}
+    />
+  );
 }

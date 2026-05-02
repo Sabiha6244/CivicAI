@@ -50,11 +50,18 @@ function sanitizeFileName(name: string) {
   return name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "").toLowerCase();
 }
 
-export default function ReportForm({ userId }: { userId: string }) {
+type ReportFormProps = {
+  userId: string;
+  defaultReporterName: string;
+};
+
+export default function ReportForm({
+  userId,
+  defaultReporterName,
+}: ReportFormProps) {
   const router = useRouter();
 
-  const [reporterName, setReporterName] = useState("");
-  const [division, setDivision] = useState("");
+  const [reporterName, setReporterName] = useState(defaultReporterName); const [division, setDivision] = useState("");
   const [district, setDistrict] = useState("");
   const [upazila, setUpazila] = useState("");
   const [cityArea, setCityArea] = useState("");
@@ -152,8 +159,7 @@ export default function ReportForm({ userId }: { userId: string }) {
   }, [division, district, upazila, cityArea, isDhakaDistrict]);
 
   function resetForm() {
-    setReporterName("");
-    setDivision("");
+    setReporterName(defaultReporterName); setDivision("");
     setDistrict("");
     setUpazila("");
     setCityArea("");
@@ -350,10 +356,20 @@ export default function ReportForm({ userId }: { userId: string }) {
                 it can be reviewed faster and more accurately.
               </p>
 
+
               <nav className={styles.sidebarNav}>
                 <Link href="/" className={styles.sidebarLink}>
                   Back to homepage
                 </Link>
+
+                <Link href="/my-reports" className={styles.sidebarLink}>
+                  My Reports
+                </Link>
+
+                <Link href="/my-profile" className={styles.sidebarLink}>
+                  My Profile
+                </Link>
+
                 <Link href="/report" className={styles.sidebarLinkActive}>
                   Report complaint
                 </Link>
@@ -424,7 +440,7 @@ export default function ReportForm({ userId }: { userId: string }) {
                       <input
                         value={reporterName}
                         onChange={(e) => setReporterName(e.target.value)}
-                        placeholder="Enter your full name"
+                        placeholder="Reporter name from your profile"
                         className={styles.input}
                         disabled={loading}
                       />

@@ -11,18 +11,43 @@ type ComplaintImageRow = {
   created_at: string;
 };
 
+type InferenceResultRow = {
+  complaint_id: string;
+  fusion_label: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 type ComplaintRow = {
   id: string;
   title: string | null;
   description: string | null;
   status: string | null;
   created_at: string;
+  updated_at: string | null;
   address_label: string | null;
   lat: number | null;
   lng: number | null;
   resolved_at: string | null;
   resolution_note: string | null;
+
+  user_category: string | null;
+  final_category: string | null;
+  category_source: string | null;
+
+  division: string | null;
+  district: string | null;
+  upazila: string | null;
+  union_name: string | null;
+  city_area: string | null;
+  post_code: string | null;
+  location_details: string | null;
+
+  duplicate_of: string | null;
+  cluster_id: string | null;
+
   complaint_media?: ComplaintImageRow[] | null;
+  inference_results?: InferenceResultRow[] | InferenceResultRow | null;
 };
 
 type ProfileRow = {
@@ -60,22 +85,41 @@ export default async function MyReportsPage() {
       description,
       status,
       created_at,
+      updated_at,
       address_label,
       lat,
       lng,
       resolved_at,
       resolution_note,
+      user_category,
+      final_category,
+      category_source,
+      division,
+      district,
+      upazila,
+      union_name,
+      city_area,
+      post_code,
+      location_details,
+      duplicate_of,
+      cluster_id,
       complaint_media (
         public_url,
         original_filename,
         created_at
+      ),
+      inference_results (
+        complaint_id,
+        fusion_label,
+        created_at,
+        updated_at
       )
     `
     )
     .eq("created_by", user.id)
     .order("created_at", { ascending: false });
 
-  const myComplaints: ComplaintRow[] = complaints ?? [];
+  const myComplaints = (complaints ?? []) as ComplaintRow[];
 
   const totalReports = myComplaints.length;
   const activeReports = myComplaints.filter((item) =>
@@ -83,6 +127,9 @@ export default async function MyReportsPage() {
   ).length;
   const resolvedReports = myComplaints.filter((item) =>
     isResolvedStatus(item.status)
+  ).length;
+  const aiCheckedReports = myComplaints.filter((item) =>
+    Boolean(getInferenceResult(item))
   ).length;
 
   return (
@@ -98,6 +145,10 @@ export default async function MyReportsPage() {
             <nav className={styles.sidebarNav}>
               <Link href="/" className={styles.sidebarLink}>
                 Home
+              </Link>
+
+              <Link href="/my-profile" className={styles.sidebarLink}>
+                My Profile
               </Link>
 
               <Link href="/my-reports" className={styles.sidebarLinkPrimary}>
@@ -129,9 +180,8 @@ export default async function MyReportsPage() {
                   <p className={styles.dashboardEyebrow}>Citizen workspace</p>
                   <h1 className={styles.dashboardTitle}>My Reports</h1>
                   <p className={styles.dashboardText}>
-                    View only the complaints submitted from your account, check
-                    their current status, and review authority notes or
-                    resolution updates when available.
+                    Track the complaints submitted from your account and check
+                    their current status, category, and authority update.
                   </p>
                 </div>
 
@@ -158,15 +208,27 @@ export default async function MyReportsPage() {
                   <p className={styles.dashboardStatLabel}>Under review</p>
                   <h2 className={styles.dashboardStatValue}>{activeReports}</h2>
                   <p className={styles.dashboardStatSubtext}>
-                    Reports still awaiting final resolution
+                    Reports waiting for final action
                   </p>
                 </div>
 
                 <div className={styles.dashboardStatCard}>
                   <p className={styles.dashboardStatLabel}>Resolved</p>
-                  <h2 className={styles.dashboardStatValue}>{resolvedReports}</h2>
+                  <h2 className={styles.dashboardStatValue}>
+                    {resolvedReports}
+                  </h2>
                   <p className={styles.dashboardStatSubtext}>
                     Reports marked resolved or completed
+                  </p>
+                </div>
+
+                <div className={styles.dashboardStatCard}>
+                  <p className={styles.dashboardStatLabel}>AI checked</p>
+                  <h2 className={styles.dashboardStatValue}>
+                    {aiCheckedReports}
+                  </h2>
+                  <p className={styles.dashboardStatSubtext}>
+                    Reports processed by CivicAI
                   </p>
                 </div>
               </div>
@@ -179,8 +241,9 @@ export default async function MyReportsPage() {
                   <h3 className={styles.loggedCardTitle}>Report tracking</h3>
                   <ul className={styles.loggedSummaryList}>
                     <li>Your own submitted complaints only</li>
-                    <li>Current complaint status and submission time</li>
-                    <li>Authority resolution note when available</li>
+                    <li>Current status and submission time</li>
+                    <li>Complaint category and AI checked status</li>
+                    <li>Authority update or resolution note</li>
                   </ul>
                 </div>
 
@@ -202,8 +265,12 @@ export default async function MyReportsPage() {
             <section className={styles.complaintsSectionLogged}>
               <div className={styles.loggedSectionHeaderRow}>
                 <div>
-                  <p className={styles.sectionEyebrowLogged}>My complaint history</p>
-                  <h2 className={styles.sectionTitleLogged}>Submitted reports</h2>
+                  <p className={styles.sectionEyebrowLogged}>
+                    My complaint history
+                  </p>
+                  <h2 className={styles.sectionTitleLogged}>
+                    Submitted reports
+                  </h2>
                 </div>
 
                 <Link href="/report" className={styles.inlineActionDark}>
@@ -217,7 +284,10 @@ export default async function MyReportsPage() {
                 </div>
               ) : myComplaints.length === 0 ? (
                 <div className={styles.emptyBoxDark}>
-                  You have not submitted any complaints yet.
+                  <p>You have not submitted any complaints yet.</p>
+                  <Link href="/report" className={styles.inlineActionDark}>
+                    Submit your first complaint
+                  </Link>
                 </div>
               ) : (
                 <div className={styles.complaintListLogged}>
@@ -226,8 +296,25 @@ export default async function MyReportsPage() {
                       item.complaint_media?.find((media) => !!media.public_url)
                         ?.public_url ?? null;
 
+                    const inference = getInferenceResult(item);
+                    const readableLocation = getReadableLocation(item);
+                    const categoryLabel = getCitizenCategoryLabel(
+                      item,
+                      inference
+                    );
+                    const aiStatus = inference ? "AI checked" : "AI pending";
+                    const areaSignal = getAreaSignal(item);
+                    const authorityUpdate = getAuthorityUpdate(
+                      item.status,
+                      item.resolution_note,
+                      item.resolved_at
+                    );
+
                     return (
-                      <article key={item.id} className={styles.complaintCardDark}>
+                      <article
+                        key={item.id}
+                        className={styles.complaintCardDark}
+                      >
                         <div className={styles.complaintCompactRow}>
                           <div className={styles.complaintThumbArea}>
                             {imageUrl ? (
@@ -238,7 +325,9 @@ export default async function MyReportsPage() {
                                 />
                               </div>
                             ) : (
-                              <div className={styles.noImageBoxDark}>No image</div>
+                              <div className={styles.noImageBoxDark}>
+                                No image
+                              </div>
                             )}
                           </div>
 
@@ -251,12 +340,11 @@ export default async function MyReportsPage() {
 
                                 <div className={styles.metaRowDark}>
                                   <span className={styles.metaItem}>
-                                    {item.address_label?.trim() ||
-                                      "Location not specified"}
+                                    {readableLocation}
                                   </span>
                                   <span className={styles.metaDotDark}>•</span>
                                   <span className={styles.metaItem}>
-                                    {new Date(item.created_at).toLocaleString()}
+                                    Submitted {formatDate(item.created_at)}
                                   </span>
                                 </div>
                               </div>
@@ -264,24 +352,30 @@ export default async function MyReportsPage() {
                               <StatusBadge label={item.status ?? "unknown"} />
                             </div>
 
+                            <div className={styles.metaRowDark}>
+                              <SimpleBadge label={categoryLabel} />
+                              <SimpleBadge label={aiStatus} />
+                              {areaSignal ? (
+                                <SimpleBadge label={areaSignal} />
+                              ) : null}
+                            </div>
+
                             <div className={styles.complaintTextCol}>
                               <p className={styles.complaintCaptionDark}>
-                                Complaint description
+                                Description
                               </p>
                               <p className={styles.complaintNoteDark}>
-                                {item.description?.trim() ||
-                                  "No description was provided for this complaint."}
+                                {getShortText(
+                                  item.description,
+                                  "No description was provided for this complaint."
+                                )}
                               </p>
 
                               <p className={styles.complaintCaptionDark}>
                                 Authority update
                               </p>
                               <p className={styles.complaintNoteDark}>
-                                {getAuthorityUpdate(
-                                  item.status,
-                                  item.resolution_note,
-                                  item.resolved_at
-                                )}
+                                {authorityUpdate}
                               </p>
                             </div>
                           </div>
@@ -303,16 +397,40 @@ function StatusBadge({ label }: { label: string }) {
   const value = label.toLowerCase();
 
   let className = styles.badgeNeutral;
-  if (value.includes("open")) className = styles.badgeOpen;
-  else if (value.includes("progress") || value.includes("processing")) {
+
+  if (value.includes("open")) {
+    className = styles.badgeOpen;
+  } else if (value.includes("progress") || value.includes("processing")) {
     className = styles.badgeProgress;
   } else if (value.includes("resolved") || value.includes("completed")) {
     className = styles.badgeResolved;
   } else if (value.includes("submitted")) {
     className = styles.badgeNeutral;
+  } else if (value.includes("rejected")) {
+    className = styles.badgeNeutral;
   }
 
   return <span className={`${styles.badge} ${className}`}>{label}</span>;
+}
+
+function SimpleBadge({ label }: { label: string }) {
+  return (
+    <span className={`${styles.badge} ${styles.badgeNeutral}`}>{label}</span>
+  );
+}
+
+function getInferenceResult(item: ComplaintRow): InferenceResultRow | null {
+  const result = item.inference_results;
+
+  if (!result) {
+    return null;
+  }
+
+  if (Array.isArray(result)) {
+    return result[0] ?? null;
+  }
+
+  return result;
 }
 
 function isResolvedStatus(status: string | null) {
@@ -322,6 +440,7 @@ function isResolvedStatus(status: string | null) {
 
 function isActiveStatus(status: string | null) {
   const value = (status ?? "").toLowerCase();
+
   return (
     value.includes("submitted") ||
     value.includes("processing") ||
@@ -337,10 +456,9 @@ function getAuthorityUpdate(
 ) {
   if (resolutionNote?.trim()) {
     if (resolvedAt) {
-      return `${resolutionNote.trim()} (Updated on ${new Date(
-        resolvedAt
-      ).toLocaleString()})`;
+      return `${resolutionNote.trim()} Updated on ${formatDate(resolvedAt)}.`;
     }
+
     return resolutionNote.trim();
   }
 
@@ -348,14 +466,12 @@ function getAuthorityUpdate(
 
   if (value.includes("resolved") || value.includes("completed")) {
     return resolvedAt
-      ? `This complaint was marked as resolved on ${new Date(
-          resolvedAt
-        ).toLocaleString()}.`
+      ? `This complaint was marked as resolved on ${formatDate(resolvedAt)}.`
       : "This complaint was marked as resolved.";
   }
 
   if (value.includes("rejected")) {
-    return "This complaint record was marked as rejected during review.";
+    return "This complaint was rejected during authority review.";
   }
 
   if (value.includes("processing") || value.includes("progress")) {
@@ -363,8 +479,94 @@ function getAuthorityUpdate(
   }
 
   if (value.includes("submitted") || value.includes("open")) {
-    return "Your complaint has been submitted and is waiting for review.";
+    return "Your complaint has been submitted and is waiting for authority review.";
   }
 
   return "No authority update is available yet.";
+}
+
+function getReadableLocation(item: ComplaintRow) {
+  const directAddress = item.address_label?.trim();
+
+  if (directAddress) {
+    return directAddress;
+  }
+
+  const locationParts = [
+    item.location_details,
+    item.city_area,
+    item.union_name,
+    item.upazila,
+    item.district,
+    item.division,
+    item.post_code ? `Post code ${item.post_code}` : null,
+  ]
+    .map((part) => part?.trim())
+    .filter(Boolean);
+
+  if (locationParts.length > 0) {
+    return locationParts.join(", ");
+  }
+
+  if (typeof item.lat === "number" && typeof item.lng === "number") {
+    return `${item.lat.toFixed(5)}, ${item.lng.toFixed(5)}`;
+  }
+
+  return "Location not specified";
+}
+
+function getCitizenCategoryLabel(
+  item: ComplaintRow,
+  inference: InferenceResultRow | null
+) {
+  const finalCategory =
+    item.final_category?.trim() ||
+    inference?.fusion_label?.trim() ||
+    item.user_category?.trim();
+
+  if (!finalCategory) {
+    return "Category pending";
+  }
+
+  return `Category: ${finalCategory}`;
+}
+
+function getAreaSignal(item: ComplaintRow) {
+  if (item.duplicate_of) {
+    return "Similar report linked";
+  }
+
+  if (item.cluster_id) {
+    return "Area pattern linked";
+  }
+
+  return null;
+}
+
+function getShortText(value: string | null, fallback: string) {
+  const clean = value?.trim();
+
+  if (!clean) {
+    return fallback;
+  }
+
+  if (clean.length <= 170) {
+    return clean;
+  }
+
+  return `${clean.slice(0, 170).trim()}...`;
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "date not available";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "date not available";
+  }
+
+  return date.toLocaleString();
 }
