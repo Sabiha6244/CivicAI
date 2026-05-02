@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./report.module.css";
 import LogoutButton from "../components/LogoutButton";
+import MobileUserMenu from "../components/MobileUserMenu";
 import {
   divisions,
   districts,
@@ -54,11 +55,13 @@ function sanitizeFileName(name: string) {
 type ReportFormProps = {
   userId: string;
   defaultReporterName: string;
+  showAuthority?: boolean;
 };
 
 export default function ReportForm({
   userId,
   defaultReporterName,
+  showAuthority = false,
 }: ReportFormProps) {
   const router = useRouter();
 
@@ -345,7 +348,8 @@ export default function ReportForm({
   }
 
   return (
-    <main className={styles.page}>
+  <main className={styles.page}>
+    <MobileUserMenu active="report" showAuthority={showAuthority} />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>

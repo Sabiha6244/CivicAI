@@ -4,6 +4,7 @@ import ReportForm from "./ReportForm";
 
 type ProfileRow = {
   full_name: string | null;
+  role: string | null;
   is_verified: boolean | null;
 };
 
@@ -21,7 +22,7 @@ export default async function ReportPage() {
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("full_name, is_verified")
+    .select("full_name, role, is_verified")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -35,6 +36,9 @@ export default async function ReportPage() {
     <ReportForm
       userId={user.id}
       defaultReporterName={userProfile.full_name ?? ""}
+      showAuthority={
+        userProfile.is_verified === true && userProfile.role === "authority"
+      }
     />
   );
 }

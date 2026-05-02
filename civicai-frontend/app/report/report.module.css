@@ -708,3 +708,12 @@
   line-height: 1.5;
   color: #94a3b8;
 }
+@media (max-width: 1100px) {
+  .sidebar {
+    display: none;
+  }
+
+  .pageGrid {
+    grid-template-columns: 1fr;
+  }
+}

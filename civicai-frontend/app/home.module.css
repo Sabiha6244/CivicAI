@@ -1443,27 +1443,107 @@
   }
 
   .sidebar {
+    display: none;
+  }
+
+  .mobileNav {
     display: block;
-    position: static;
-    height: auto;
-    padding: 18px;
-    border-right: none;
+    position: sticky;
+    top: 0;
+    z-index: 80;
+    padding: 12px 14px;
+    background: rgba(8, 16, 24, 0.96);
     border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    backdrop-filter: blur(12px);
   }
 
-  .sidebarInner {
-    height: auto;
-    min-height: auto;
-  }
-
-  .sidebarFooter {
-    margin-top: 18px;
-    padding-top: 0;
+  .mobileNavInner {
+    border-radius: 20px;
+    padding: 14px;
+    background: linear-gradient(180deg, #0f766e 0%, #0c5f58 100%);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
   }
 
   .dashboardPage {
     padding: 24px 18px 34px;
   }
+}
+
+/* ---------- MOBILE USER MENU ---------- */
+
+.mobileNav {
+  display: none;
+}
+
+.mobileNavInner {
+  width: 100%;
+}
+
+.mobileNavTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.mobileNavBrand {
+  text-decoration: none;
+  color: #ffffff;
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.mobileMenuButton {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mobileMenuPanel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.mobileMenuLink,
+.mobileMenuLinkActive {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  border-radius: 14px;
+  padding: 13px 14px;
+  font-size: 0.96rem;
+  font-weight: 800;
+}
+
+.mobileMenuLink {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mobileMenuLinkActive {
+  color: #0f766e;
+  background: #ffffff;
+  border: 1px solid #ffffff;
+}
+
+.mobileMenuLogout {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 13px 14px;
+  background: #f8b84e;
+  color: #0f172a;
+  font-size: 0.96rem;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 @media (max-width: 980px) {
