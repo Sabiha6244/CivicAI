@@ -6,7 +6,15 @@ import LogoutButton from "./LogoutButton";
 import styles from "../home.module.css";
 
 type MobileUserMenuProps = {
-  active?: "home" | "my-reports" | "my-profile" | "report" | "authority";
+  active?:
+    | "home"
+    | "my-reports"
+    | "my-profile"
+    | "report"
+    | "authority"
+    | "authority-complaints"
+    | "authority-analytics"
+    | "authority-hotspots";
   showAuthority?: boolean;
 };
 
@@ -48,51 +56,110 @@ export default function MobileUserMenu({
               Home
             </Link>
 
-            <Link
-              href="/my-reports"
-              className={
-                active === "my-reports"
-                  ? styles.mobileMenuLinkActive
-                  : styles.mobileMenuLink
-              }
-            >
-              My Reports
-            </Link>
-
-            <Link
-              href="/my-profile"
-              className={
-                active === "my-profile"
-                  ? styles.mobileMenuLinkActive
-                  : styles.mobileMenuLink
-              }
-            >
-              My Profile
-            </Link>
-
-            <Link
-              href="/report"
-              className={
-                active === "report"
-                  ? styles.mobileMenuLinkActive
-                  : styles.mobileMenuLink
-              }
-            >
-              Report complaint
-            </Link>
-
             {showAuthority ? (
-              <Link
-                href="/authority"
-                className={
-                  active === "authority"
-                    ? styles.mobileMenuLinkActive
-                    : styles.mobileMenuLink
-                }
-              >
-                Authority dashboard
-              </Link>
-            ) : null}
+              <>
+                <Link
+                  href="/authority"
+                  className={
+                    active === "authority"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Authority dashboard
+                </Link>
+
+                <Link
+                  href="/authority/complaints"
+                  className={
+                    active === "authority-complaints"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Manage complaints
+                </Link>
+
+                <Link
+                  href="/authority/analytics"
+                  className={
+                    active === "authority-analytics"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Analytics
+                </Link>
+
+                <Link
+                  href="/authority/analytics/hotspots"
+                  className={
+                    active === "authority-hotspots"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Hotspots
+                </Link>
+
+                <Link
+                  href="/report"
+                  className={
+                    active === "report"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Report complaint
+                </Link>
+
+                <Link
+                  href="/my-profile"
+                  className={
+                    active === "my-profile"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  My Profile
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  href="/my-reports"
+                  className={
+                    active === "my-reports"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  My Reports
+                </Link>
+
+                <Link
+                  href="/my-profile"
+                  className={
+                    active === "my-profile"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  My Profile
+                </Link>
+
+                <Link
+                  href="/report"
+                  className={
+                    active === "report"
+                      ? styles.mobileMenuLinkActive
+                      : styles.mobileMenuLink
+                  }
+                >
+                  Report complaint
+                </Link>
+              </>
+            )}
 
             <LogoutButton className={styles.mobileMenuLogout} />
           </nav>
