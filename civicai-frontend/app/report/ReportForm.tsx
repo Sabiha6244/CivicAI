@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import styles from "./report.module.css";
+import LogoutButton from "../components/LogoutButton";
 import {
   divisions,
   districts,
@@ -374,7 +375,9 @@ export default function ReportForm({
                   Report complaint
                 </Link>
               </nav>
-
+<div className={styles.sidebarLogoutArea}>
+  <LogoutButton className={styles.sidebarLogoutButton} />
+</div>
 
             </div>
           </aside>

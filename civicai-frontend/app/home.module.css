@@ -1443,7 +1443,22 @@
   }
 
   .sidebar {
-    display: none;
+    display: block;
+    position: static;
+    height: auto;
+    padding: 18px;
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  }
+
+  .sidebarInner {
+    height: auto;
+    min-height: auto;
+  }
+
+  .sidebarFooter {
+    margin-top: 18px;
+    padding-top: 0;
   }
 
   .dashboardPage {

@@ -123,7 +123,30 @@
   line-height: 1.8;
   font-size: 0.9rem;
 }
+.sidebarLogoutArea {
+  margin-top: 18px;
+}
 
+.sidebarLogoutButton {
+  width: 100%;
+  border: none;
+  border-radius: 18px;
+  padding: 16px 18px;
+  background: #f8b84e;
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(248, 184, 78, 0.22);
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.sidebarLogoutButton:hover {
+  transform: translateY(-1px);
+  background: #ffc766;
+}
 .mainContent {
   min-width: 0;
 }
