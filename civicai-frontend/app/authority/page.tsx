@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import styles from "./authority.module.css";
 import AuthorityDashboardThumb from "./AuthorityDashboardThumb";
+import MobileUserMenu from "../components/MobileUserMenu";
 
 type ComplaintRow = {
   id: string;
@@ -553,8 +554,8 @@ export default async function AuthorityPage() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {},
-        remove() {},
+        set() { },
+        remove() { },
       },
     }
   );
@@ -786,6 +787,8 @@ export default async function AuthorityPage() {
 
   return (
     <main className={styles.page}>
+      <MobileUserMenu active="authority" showAuthority={true} />
+
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
@@ -800,6 +803,9 @@ export default async function AuthorityPage() {
               <nav className={styles.sidebarNav}>
                 <Link href="/" className={styles.sidebarLink}>
                   Back to homepage
+                </Link>
+                <Link href="/my-profile" className={styles.sidebarLink}>
+                  My Profile
                 </Link>
                 <Link href="/authority" className={styles.sidebarLinkActive}>
                   Authority dashboard
