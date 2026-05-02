@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabaseServer";
 import LogoutButton from "./components/LogoutButton";
 import styles from "./home.module.css";
 import ImageLightbox from "./components/ImageLightbox";
+import MobileUserMenu from "./components/MobileUserMenu";
 
 type ComplaintImageRow = {
   public_url: string | null;
@@ -858,6 +859,8 @@ export default async function HomePage() {
 
   return (
     <main className={styles.page}>
+      <MobileUserMenu active="home" showAuthority={isAuthority} />
+
       <div className={styles.loggedShell}>
         <aside className={styles.sidebar}>
           <div className={styles.sidebarInner}>
@@ -869,6 +872,10 @@ export default async function HomePage() {
             <nav className={styles.sidebarNav}>
               <Link href="/" className={styles.sidebarLink}>
                 Home
+              </Link>
+
+              <Link href="/my-profile" className={styles.sidebarLink}>
+                My Profile
               </Link>
 
               {!isAuthority ? (

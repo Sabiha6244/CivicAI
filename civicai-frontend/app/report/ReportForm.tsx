@@ -65,8 +65,8 @@ export default function ReportForm({
 }: ReportFormProps) {
   const router = useRouter();
 
-  const [reporterName, setReporterName] = useState(defaultReporterName); const [division, setDivision] = useState("");
-  const [district, setDistrict] = useState("");
+const [reporterName, setReporterName] = useState(defaultReporterName);
+const [division, setDivision] = useState("");  const [district, setDistrict] = useState("");
   const [upazila, setUpazila] = useState("");
   const [cityArea, setCityArea] = useState("");
   const [locationDetails, setLocationDetails] = useState("");
@@ -163,7 +163,8 @@ export default function ReportForm({
   }, [division, district, upazila, cityArea, isDhakaDistrict]);
 
   function resetForm() {
-    setReporterName(defaultReporterName); setDivision("");
+    setReporterName(defaultReporterName); 
+    setDivision("");
     setDistrict("");
     setUpazila("");
     setCityArea("");
