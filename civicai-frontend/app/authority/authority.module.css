@@ -2125,3 +2125,18 @@
 .kvValue {
   line-height: 1.55;
 }
+/* ---------- MOBILE AUTHORITY LAYOUT FIX ---------- */
+
+@media (max-width: 1100px) {
+  .pageGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .wrapper {
+    padding-top: 18px;
+  }
+}
