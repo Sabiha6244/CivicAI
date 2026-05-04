@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import styles from "../authority.module.css";
+import MobileUserMenu from "../../components/MobileUserMenu";
 
 type ComplaintRow = {
   id: string;
@@ -825,6 +826,8 @@ export default async function AuthorityAnalyticsPage() {
 
   return (
     <main className={styles.page}>
+      <MobileUserMenu active="authority-analytics" showAuthority={true} />
+
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
@@ -851,6 +854,9 @@ export default async function AuthorityAnalyticsPage() {
                 </Link>
                 <Link href="/authority/analytics" className={styles.sidebarLinkActive}>
                   Authority analytics
+                </Link>
+                <Link href="/my-profile" className={styles.sidebarLink}>
+                  My Profile
                 </Link>
               </nav>
             </div>
