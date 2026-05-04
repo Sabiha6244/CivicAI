@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import styles from "../authority.module.css";
 import AuthorityDashboardThumb from "../AuthorityDashboardThumb";
+import MobileUserMenu from "../../components/MobileUserMenu";
 
 type ComplaintRow = {
   id: string;
@@ -659,6 +660,8 @@ export default async function AuthorityComplaintsPage({
 
   return (
     <main className={styles.page}>
+      <MobileUserMenu active="authority-complaints" showAuthority={true} />
+
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
