@@ -6,6 +6,7 @@ import AuthorityActionPanel from "./AuthorityActionPanel";
 import AuthorityImageLightbox from "./AuthorityImageLightbox";
 import DuplicateComplaintsPanel from "./DuplicateComplaintsPanel";
 import styles from "../authority.module.css";
+import MobileUserMenu from "../../components/MobileUserMenu";
 
 type ComplaintDetail = {
   id: string;
@@ -604,6 +605,8 @@ cluster_id
 
   return (
     <main className={styles.page}>
+      <MobileUserMenu active="authority-complaints" showAuthority={true} />
+
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
@@ -624,6 +627,21 @@ cluster_id
                 </Link>
                 <Link href={`/authority/${id}`} className={styles.sidebarLinkActive}>
                   Current complaint
+                </Link>
+                <Link href="/authority/complaints" className={styles.sidebarLink}>
+                  Manage complaints
+                </Link>
+
+                <Link href="/authority/analytics" className={styles.sidebarLink}>
+                  Open analytics
+                </Link>
+
+                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                  View hotspots
+                </Link>
+
+                <Link href="/my-profile" className={styles.sidebarLink}>
+                  My Profile
                 </Link>
               </nav>
             </div>
