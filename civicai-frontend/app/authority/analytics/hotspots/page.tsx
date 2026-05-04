@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import styles from "../../authority.module.css";
 import HotspotMapShell from "./HotspotMapShell";
-
+import MobileUserMenu from "../../../components/MobileUserMenu";
 type ComplaintRow = {
     id: string;
     title: string | null;
@@ -221,6 +221,8 @@ export default async function AuthorityAnalyticsHotspotsPage() {
 
     return (
         <main className={styles.page}>
+            <MobileUserMenu active="authority-hotspots" showAuthority={true} />
+
             <div className={styles.wrapper}>
                 <section className={styles.pageGrid}>
                     <aside className={styles.sidebar}>
@@ -235,6 +237,9 @@ export default async function AuthorityAnalyticsHotspotsPage() {
                             <nav className={styles.sidebarNav}>
                                 <Link href="/" className={styles.sidebarLink}>
                                     Back to homepage
+                                </Link>
+                                <Link href="/my-profile" className={styles.sidebarLink}>
+                                    My Profile
                                 </Link>
                                 <Link href="/authority" className={styles.sidebarLink}>
                                     Authority dashboard
