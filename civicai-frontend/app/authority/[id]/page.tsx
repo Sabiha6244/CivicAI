@@ -619,9 +619,7 @@ cluster_id
               </p>
 
               <nav className={styles.sidebarNav}>
-                <Link href="/" className={styles.sidebarLink}>
-                  Back to homepage
-                </Link>
+                
                 <Link href="/authority" className={styles.sidebarLink}>
                   Authority dashboard
                 </Link>
@@ -640,9 +638,6 @@ cluster_id
                   View hotspots
                 </Link>
 
-                <Link href="/my-profile" className={styles.sidebarLink}>
-                  My Profile
-                </Link>
               </nav>
             </div>
           </aside>

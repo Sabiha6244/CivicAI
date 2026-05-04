@@ -238,9 +238,7 @@ export default async function AuthorityAnalyticsHotspotsPage() {
                                 <Link href="/" className={styles.sidebarLink}>
                                     Back to homepage
                                 </Link>
-                                <Link href="/my-profile" className={styles.sidebarLink}>
-                                    My Profile
-                                </Link>
+                                
                                 <Link href="/authority" className={styles.sidebarLink}>
                                     Authority dashboard
                                 </Link>

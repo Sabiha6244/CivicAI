@@ -855,9 +855,7 @@ export default async function AuthorityAnalyticsPage() {
                 <Link href="/authority/analytics" className={styles.sidebarLinkActive}>
                   Authority analytics
                 </Link>
-                <Link href="/my-profile" className={styles.sidebarLink}>
-                  My Profile
-                </Link>
+                
               </nav>
             </div>
           </aside>

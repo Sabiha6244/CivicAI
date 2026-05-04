@@ -804,9 +804,7 @@ export default async function AuthorityPage() {
                 <Link href="/" className={styles.sidebarLink}>
                   Back to homepage
                 </Link>
-                <Link href="/my-profile" className={styles.sidebarLink}>
-                  My Profile
-                </Link>
+              
                 <Link href="/authority" className={styles.sidebarLinkActive}>
                   Authority dashboard
                 </Link>
