@@ -21,6 +21,31 @@ type ComplaintRow = {
   final_category: string | null;
   duplicate_of: string | null;
   cluster_id: string | null;
+  assigned_office_id: string | null;
+  routing_status: string | null;
+  responsible_department_type: string | null;
+  responsible_department_label: string | null;
+  routing_model: string | null;
+  assigned_office: AssignedOfficeRow | AssignedOfficeRow[] | null;
+};
+
+type AssignedOfficeRow = {
+  id: string | null;
+  office_name: string | null;
+  office_type: string | null;
+  authority_body_type: string | null;
+  service_area_name: string | null;
+  district: string | null;
+  is_verified_office: boolean | null;
+  verification_status: string | null;
+};
+
+type SelectedOfficeFilterRow = {
+  id: string;
+  office_name: string | null;
+  authority_body_type: string | null;
+  service_area_name: string | null;
+  district: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -261,6 +286,78 @@ function reviewFilterLabel(filterValue: string) {
   }
 }
 
+function authorityTypeFilterLabel(filterValue: string) {
+  switch (filterValue) {
+    case "city":
+      return "City corporation";
+    case "local":
+      return "Local authority";
+    default:
+      return "All authority types";
+  }
+}
+
+function assignmentFilterLabel(filterValue: string) {
+  switch (filterValue) {
+    case "assigned":
+      return "Assigned to authority";
+    case "review":
+      return "Needs routing review";
+    case "unassigned":
+      return "Unassigned";
+    case "provisional":
+      return "Assigned to pending authority";
+    default:
+      return "All assignment states";
+  }
+}
+
+function getAssignedOffice(
+  value: AssignedOfficeRow | AssignedOfficeRow[] | null
+) {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value;
+}
+
+function isCityCorporationOffice(office?: AssignedOfficeRow | null) {
+  if (!office) return false;
+
+  const combined = [
+    office.office_name,
+    office.office_type,
+    office.authority_body_type,
+    office.service_area_name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return combined.includes("city") || combined.includes("corporation");
+}
+
+function isLocalAuthorityOffice(office?: AssignedOfficeRow | null) {
+  if (!office) return false;
+
+  const combined = [
+    office.office_name,
+    office.office_type,
+    office.authority_body_type,
+    office.service_area_name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return combined.includes("local") || combined.includes("district");
+}
+
+function compactAuthorityName(value?: string | null) {
+  if (!value) return "Unassigned authority";
+  if (value.length <= 46) return value;
+  return `${value.slice(0, 45).trim()}…`;
+}
+
 export default async function AuthorityComplaintsPage({
   searchParams,
 }: {
@@ -277,6 +374,9 @@ export default async function AuthorityComplaintsPage({
     cluster?: string;
     clusterId?: string;
     pattern?: string;
+    office?: string;
+    authorityType?: string;
+    assignment?: string;
   }>;
 }) {
   const params = (await searchParams) ?? {};
@@ -291,6 +391,9 @@ export default async function AuthorityComplaintsPage({
   const selectedCluster = (params.cluster ?? "").trim();
   const selectedClusterId = (params.clusterId ?? "").trim();
   const selectedPattern = (params.pattern ?? "").trim();
+  const selectedOfficeId = (params.office ?? "").trim();
+  const selectedAuthorityType = (params.authorityType ?? "all").trim();
+  const selectedAssignment = (params.assignment ?? "all").trim();
   const currentPage = Math.max(Number(params.page ?? "1") || 1, 1);
   const pageSize = 12;
 
@@ -307,6 +410,9 @@ export default async function AuthorityComplaintsPage({
     cluster: selectedCluster,
     clusterId: selectedClusterId,
     pattern: selectedPattern,
+    office: selectedOfficeId,
+    authorityType: selectedAuthorityType,
+    assignment: selectedAssignment,
   });
 
   const cookieStore = await cookies();
@@ -343,13 +449,78 @@ export default async function AuthorityComplaintsPage({
     redirect("/login?next=/authority/complaints&verify=1");
   }
 
-  if (profile.role !== "authority") {
+  const isAdmin = profile.role === "admin";
+  const isLocalAuthority = profile.role === "authority";
+
+  if (!isAdmin && !isLocalAuthority) {
     redirect("/");
   }
 
-  const { data: complaintsData, error: complaintsError } = await supabase
-    .from("complaints")
-    .select(`
+  let linkedOfficeIds: string[] = [];
+
+  if (isLocalAuthority) {
+    const { data: officeAccessRows, error: officeAccessError } = await supabase
+      .from("authority_office_users")
+      .select("office_id")
+      .eq("user_id", user.id)
+      .eq("access_status", "active");
+
+    if (officeAccessError) {
+      return (
+        <main className={styles.page}>
+          <div className={styles.wrapper}>
+            <div className={styles.alertBox}>
+              Failed to load your authority office access:{" "}
+              {officeAccessError.message}
+            </div>
+          </div>
+        </main>
+      );
+    }
+
+    linkedOfficeIds = Array.from(
+      new Set(
+        ((officeAccessRows ?? []) as { office_id: string | null }[])
+          .map((row) => row.office_id)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+  }
+
+  const effectiveSelectedOfficeId =
+    isAdmin || !selectedOfficeId
+      ? selectedOfficeId
+      : linkedOfficeIds.includes(selectedOfficeId)
+        ? selectedOfficeId
+        : "";
+
+  let selectedOfficeData: SelectedOfficeFilterRow | null = null;
+
+  if (effectiveSelectedOfficeId) {
+    const { data } = await supabase
+      .from("authority_offices")
+      .select(`
+      id,
+      office_name,
+      authority_body_type,
+      service_area_name,
+      district
+    `)
+      .eq("id", effectiveSelectedOfficeId)
+      .maybeSingle();
+
+    selectedOfficeData = data as SelectedOfficeFilterRow | null;
+  }
+
+  let complaintsData: unknown[] | null = [];
+  let complaintsError: { message: string } | null = null;
+
+  if (isLocalAuthority && linkedOfficeIds.length === 0) {
+    complaintsData = [];
+  } else {
+    let complaintsQuery = supabase
+      .from("complaints")
+      .select(`
       id,
       title,
       description,
@@ -363,9 +534,33 @@ export default async function AuthorityComplaintsPage({
       user_category,
       final_category,
       duplicate_of,
-      cluster_id
+      cluster_id,
+      assigned_office_id,
+      routing_status,
+      responsible_department_type,
+      responsible_department_label,
+      routing_model,
+      assigned_office:authority_offices (
+        id,
+        office_name,
+        office_type,
+        authority_body_type,
+        service_area_name,
+        district,
+        is_verified_office,
+        verification_status
+      )
     `)
-    .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false });
+
+    if (isLocalAuthority) {
+      complaintsQuery = complaintsQuery.in("assigned_office_id", linkedOfficeIds);
+    }
+
+    const result = await complaintsQuery;
+    complaintsData = result.data;
+    complaintsError = result.error;
+  }
 
   if (complaintsError) {
     return (
@@ -474,8 +669,19 @@ export default async function AuthorityComplaintsPage({
     new Set(complaints.map((complaint) => getAreaName(complaint)).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
 
+  const selectedOfficeName =
+    selectedOfficeData?.office_name ||
+    (effectiveSelectedOfficeId ? `Office ID: ${effectiveSelectedOfficeId}` : "");
+
   const filteredComplaints = complaints.filter((complaint) => {
     const ai = inferenceByComplaint.get(complaint.id);
+    const assignedOffice = getAssignedOffice(complaint.assigned_office);
+
+    const assignedOfficeName = assignedOffice?.office_name ?? "";
+    const responsibleDepartment =
+      complaint.responsible_department_label || complaint.responsible_department_type || "";
+    const routingStatus = complaint.routing_status || "";
+
     const reliability = ai?.model_versions?.reliability_status ?? null;
     const citizenAiConflict = parseBoolean(ai?.model_versions?.citizen_ai_conflict);
     const manualReviewRequired = parseBoolean(
@@ -512,7 +718,10 @@ export default async function AuthorityComplaintsPage({
       complaint.description.toLowerCase().includes(searchLower) ||
       (complaint.reporter_name ?? "").toLowerCase().includes(searchLower) ||
       derivedCategory.toLowerCase().includes(searchLower) ||
-      derivedArea.toLowerCase().includes(searchLower);
+      derivedArea.toLowerCase().includes(searchLower) ||
+      assignedOfficeName.toLowerCase().includes(searchLower) ||
+      responsibleDepartment.toLowerCase().includes(searchLower) ||
+      routingStatus.toLowerCase().includes(searchLower);
 
     const matchesStatus = matchesStatusFilter(selectedStatus, complaint.status);
 
@@ -538,8 +747,7 @@ export default async function AuthorityComplaintsPage({
       (selectedDuplicate === "linked" && savedDuplicateIds.length > 0);
 
     const matchesDuplicateOf =
-      !selectedDuplicateOf ||
-      savedDuplicateIds.includes(selectedDuplicateOf);
+      !selectedDuplicateOf || savedDuplicateIds.includes(selectedDuplicateOf);
 
     const matchesCluster =
       !selectedCluster ||
@@ -554,6 +762,25 @@ export default async function AuthorityComplaintsPage({
       !selectedPattern ||
       (selectedPattern === "repeated" && isRepeatedPattern);
 
+    const matchesOffice =
+      !effectiveSelectedOfficeId ||
+      complaint.assigned_office_id === effectiveSelectedOfficeId;
+
+    const matchesAuthorityType =
+      selectedAuthorityType === "all" ||
+      (selectedAuthorityType === "city" && isCityCorporationOffice(assignedOffice)) ||
+      (selectedAuthorityType === "local" && isLocalAuthorityOffice(assignedOffice));
+
+    const matchesAssignment =
+      selectedAssignment === "all" ||
+      (selectedAssignment === "assigned" && Boolean(complaint.assigned_office_id)) ||
+      (selectedAssignment === "review" &&
+        complaint.routing_status === "needs_routing_review") ||
+      (selectedAssignment === "unassigned" && !complaint.assigned_office_id) ||
+      (selectedAssignment === "provisional" &&
+        Boolean(complaint.assigned_office_id) &&
+        assignedOffice?.verification_status !== "verified");
+
     return (
       matchesSearch &&
       matchesStatus &&
@@ -564,7 +791,10 @@ export default async function AuthorityComplaintsPage({
       matchesDuplicateOf &&
       matchesCluster &&
       matchesClusterId &&
-      matchesPattern
+      matchesPattern &&
+      matchesOffice &&
+      matchesAuthorityType &&
+      matchesAssignment
     );
   });
 
@@ -634,7 +864,10 @@ export default async function AuthorityComplaintsPage({
     Boolean(selectedDuplicateOf) ||
     Boolean(selectedCluster) ||
     Boolean(selectedClusterId) ||
-    Boolean(selectedPattern);
+    Boolean(selectedPattern) ||
+    Boolean(effectiveSelectedOfficeId) ||
+    selectedAuthorityType !== "all" ||
+    selectedAssignment !== "all";
 
   function buildPageHref(page: number) {
     const search = new URLSearchParams();
@@ -649,53 +882,97 @@ export default async function AuthorityComplaintsPage({
     if (selectedCluster) search.set("cluster", selectedCluster);
     if (selectedClusterId) search.set("clusterId", selectedClusterId);
     if (selectedPattern) search.set("pattern", selectedPattern);
+    if (effectiveSelectedOfficeId) {
+      search.set("office", effectiveSelectedOfficeId);
+    } if (selectedAuthorityType !== "all") {
+      search.set("authorityType", selectedAuthorityType);
+    }
+    if (selectedAssignment !== "all") {
+      search.set("assignment", selectedAssignment);
+    }
     search.set("page", String(page));
     return `/authority/complaints?${search.toString()}`;
   }
 
-  const heroSubtitle =
-    sourceContext === "analytics"
-      ? "A filtered operational queue opened from analytics, so authorities can move directly from pattern discovery into complaint review."
-      : "A structured complaint management page for reviewing new, unresolved, duplicate-linked, clustered, and flagged complaints without overloading the dashboard.";
+  const heroSubtitle = effectiveSelectedOfficeId
+    ? `Showing complaints assigned to ${selectedOfficeName}. You can refine this service-desk queue using status, review, category, and area filters.`
+    : isLocalAuthority
+      ? "Showing only complaints assigned to your approved authority office access."
+      : sourceContext === "analytics"
+        ? "A filtered operational queue opened from analytics, so authorities can move directly from pattern discovery into complaint review."
+        : "A structured complaint management page for reviewing new, unresolved, duplicate-linked, clustered, and flagged complaints without overloading the dashboard.";
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority-complaints" showAuthority={true} />
-
+      <MobileUserMenu active="authority-complaints" showAuthority={isAdmin} />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
             <div className={styles.sidebarCard}>
               <p className={styles.sidebarEyebrow}>Authority workspace</p>
-              <h2 className={styles.sidebarTitle}>All complaints</h2>
+              <h2 className={styles.sidebarTitle}>
+                {isAdmin ? "All complaints" : "Assigned complaints"}
+              </h2>
               <p className={styles.sidebarText}>
-                Search, filter, and manage complaint records from one operational work queue.
+                {isAdmin
+                  ? "Search, filter, and manage complaint records from one operational work queue."
+                  : "Review only the complaints assigned to your approved authority office."}
               </p>
 
               <nav className={styles.sidebarNav}>
                 <Link href="/" className={styles.sidebarLink}>
                   Back to homepage
                 </Link>
-                <Link href="/authority" className={styles.sidebarLink}>
-                  Authority dashboard
-                </Link>
-                <Link href="/authority/complaints" className={styles.sidebarLinkActive}>
-                  All complaints
-                </Link>
-                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
-                  View Hotspots
-                </Link>
-                <Link href="/authority/analytics" className={styles.sidebarLink}>
-                  Open analytics
-                </Link>
+
+                {isAdmin ? (
+                  <>
+                    <Link href="/authority" className={styles.sidebarLink}>
+                      Authority dashboard
+                    </Link>
+
+                    <Link href="/authority/complaints" className={styles.sidebarLinkActive}>
+                      All complaints
+                    </Link>
+
+                    <Link href="/authority/registry" className={styles.sidebarLink}>
+                      Authority registry
+                    </Link>
+
+                    <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                      View Hotspots
+                    </Link>
+
+                    <Link href="/authority/analytics" className={styles.sidebarLink}>
+                      Open analytics
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <Link href="/authority/complaints" className={styles.sidebarLinkActive}>
+                      Assigned complaints
+                    </Link>
+
+                    <Link href="/report" className={styles.sidebarLink}>
+                      Create report
+                    </Link>
+
+                    <Link href="/my-profile" className={styles.sidebarLink}>
+                      My profile
+                    </Link>
+                  </>
+                )}
               </nav>
             </div>
           </aside>
 
           <div className={styles.mainContent}>
             <section className={styles.hero}>
-              <p className={styles.eyebrow}>Authority complaint management</p>
-              <h1 className={styles.title}>All complaints work queue</h1>
+              <p className={styles.eyebrow}>
+                {isAdmin ? "Authority complaint management" : "Local authority complaint queue"}
+              </p>
+              <h1 className={styles.title}>
+                {isAdmin ? "All complaints work queue" : "Assigned complaints work queue"}
+              </h1>
               <p className={styles.subtitle}>{heroSubtitle}</p>
 
               <div className={styles.statStrip}>
@@ -732,7 +1009,8 @@ export default async function AuthorityComplaintsPage({
                 <div className={styles.statMiniCard}>
                   <p className={styles.statMiniLabel}>Repeated clusters</p>
                   <h3 className={styles.statMiniValue}>{repeatedClusterCount}</h3>
-                  <p className={styles.statMiniText}>Complaints with saved cluster IDs.</p>                </div>
+                  <p className={styles.statMiniText}>Complaints with saved cluster IDs.</p>
+                </div>
 
                 <div className={styles.statMiniCard}>
                   <p className={styles.statMiniLabel}>Repeated patterns</p>
@@ -745,14 +1023,15 @@ export default async function AuthorityComplaintsPage({
             </section>
 
             <section className={styles.section}>
-              <div className={styles.sectionHeader}>
-                <div>
-                  <h2 className={styles.sectionTitle}>Filter complaints</h2>
-                  <p className={styles.sectionText}>
-                    Use search, category, area, review, duplicate, and cluster filters to find unreviewed, urgent, or analytics-selected complaints.
+              {isLocalAuthority && linkedOfficeIds.length === 0 ? (
+                <div className={styles.warningBox}>
+                  <p className={styles.kvLabel}>No linked authority office</p>
+                  <p className={styles.kvValue}>
+                    Your account has the authority role, but it is not linked to an active
+                    service desk yet. Please contact central authority.
                   </p>
                 </div>
-              </div>
+              ) : null}
 
               {hasActiveFilters ? (
                 <div className={styles.activeFilterSummary}>
@@ -760,45 +1039,82 @@ export default async function AuthorityComplaintsPage({
                     <div>
                       <h3 className={styles.activeFilterTitle}>Active filter summary</h3>
                       <p className={styles.activeFilterText}>
-                        {sourceContext === "analytics"
-                          ? "These filters were opened from analytics and can be refined further below."
-                          : "These filters are currently shaping the complaint queue."}
+                        {selectedOfficeId
+                          ? "This queue is filtered by a selected authority service desk."
+                          : sourceContext === "analytics"
+                            ? "These filters were opened from analytics and can be refined further below."
+                            : "These filters are currently shaping the complaint queue."}
                       </p>
                     </div>
 
-                    <Link href="/authority/complaints" className={styles.secondaryLink}>
-                      Clear all filters
-                    </Link>
+                    <div className={styles.complaintsFilterActions}>
+                      {selectedOfficeId ? (
+                        <Link href="/authority/registry" className={styles.secondaryLink}>
+                          Back to registry
+                        </Link>
+                      ) : null}
+
+                      <Link href="/authority/complaints" className={styles.secondaryLink}>
+                        Clear all filters
+                      </Link>
+                    </div>
                   </div>
 
                   <div className={styles.activeFilterChips}>
+                    {selectedOfficeId ? (
+                      <span className={styles.chip}>
+                        Assigned office: {selectedOfficeName}
+                      </span>
+                    ) : null}
+
+                    {selectedAuthorityType !== "all" ? (
+                      <span className={styles.chip}>
+                        Authority type: {authorityTypeFilterLabel(selectedAuthorityType)}
+                      </span>
+                    ) : null}
+
+                    {selectedAssignment !== "all" ? (
+                      <span className={styles.chip}>
+                        Assignment: {assignmentFilterLabel(selectedAssignment)}
+                      </span>
+                    ) : null}
+
                     {queryText ? <span className={styles.chip}>Search: {queryText}</span> : null}
+
                     {selectedCategory ? (
                       <span className={styles.chip}>Category: {selectedCategory}</span>
                     ) : null}
+
                     {selectedArea ? <span className={styles.chip}>Area: {selectedArea}</span> : null}
+
                     {selectedStatus !== "all" ? (
                       <span className={styles.chip}>
                         Status: {statusFilterLabel(selectedStatus)}
                       </span>
                     ) : null}
+
                     {selectedReview !== "all" ? (
                       <span className={styles.chip}>
                         Review: {reviewFilterLabel(selectedReview)}
                       </span>
                     ) : null}
+
                     {selectedDuplicate === "linked" ? (
                       <span className={styles.chip}>Duplicate linked</span>
                     ) : null}
+
                     {selectedDuplicateOf ? (
                       <span className={styles.chip}>Duplicate source: {selectedDuplicateOf}</span>
                     ) : null}
+
                     {selectedCluster === "repeated" ? (
                       <span className={styles.chip}>Repeated clusters</span>
                     ) : null}
+
                     {selectedClusterId ? (
                       <span className={styles.chip}>Cluster: {selectedClusterId}</span>
                     ) : null}
+
                     {selectedPattern === "repeated" ? (
                       <span className={styles.chip}>Repeated issue patterns</span>
                     ) : null}
@@ -818,7 +1134,7 @@ export default async function AuthorityComplaintsPage({
                       type="text"
                       name="q"
                       defaultValue={queryText}
-                      placeholder="Search by title, reporter, description, area, or category"
+                      placeholder="Search title, reporter, area, category, authority, or department"
                       className={styles.input}
                     />
                   </div>
@@ -881,6 +1197,34 @@ export default async function AuthorityComplaintsPage({
                   </div>
 
                   <div>
+                    <label className={styles.label}>Authority type</label>
+                    <select
+                      name="authorityType"
+                      defaultValue={selectedAuthorityType}
+                      className={styles.input}
+                    >
+                      <option value="all">All authority types</option>
+                      <option value="city">City corporation</option>
+                      <option value="local">Local authority</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={styles.label}>Assignment</label>
+                    <select
+                      name="assignment"
+                      defaultValue={selectedAssignment}
+                      className={styles.input}
+                    >
+                      <option value="all">All assignment states</option>
+                      <option value="assigned">Assigned to authority</option>
+                      <option value="review">Needs routing review</option>
+                      <option value="unassigned">Unassigned</option>
+                      <option value="provisional">Assigned to pending authority</option>
+                    </select>
+                  </div>
+
+                  <div>
                     <label className={styles.label}>Duplicate</label>
                     <select name="duplicate" defaultValue={selectedDuplicate} className={styles.input}>
                       <option value="">All complaints</option>
@@ -897,6 +1241,10 @@ export default async function AuthorityComplaintsPage({
                   </div>
                 </div>
 
+                {selectedOfficeId ? (
+                  <input type="hidden" name="office" value={selectedOfficeId} />
+                ) : null}
+
                 {sourceContext ? (
                   <input type="hidden" name="source" value={sourceContext} />
                 ) : null}
@@ -909,11 +1257,11 @@ export default async function AuthorityComplaintsPage({
                   <input type="hidden" name="clusterId" value={selectedClusterId} />
                 ) : null}
 
-
                 <div className={styles.complaintsFilterActions}>
                   <button type="submit" className={styles.primaryButton}>
                     Apply filters
                   </button>
+
                   <Link href="/authority/complaints" className={styles.secondaryLink}>
                     Clear filters
                   </Link>
@@ -938,6 +1286,12 @@ export default async function AuthorityComplaintsPage({
                   {paginatedComplaints.map((complaint) => {
                     const ai = inferenceByComplaint.get(complaint.id);
                     const media = mediaByComplaint.get(complaint.id);
+                    const assignedOffice = getAssignedOffice(complaint.assigned_office);
+                    const assignedOfficeName = assignedOffice?.office_name ?? null;
+                    const routingStatus = complaint.routing_status ?? "unassigned";
+                    const responsibleDepartment =
+                      complaint.responsible_department_label || "Department not assigned";
+
                     const reliability = ai?.model_versions?.reliability_status ?? null;
                     const manualReviewRequired = parseBoolean(
                       ai?.model_versions?.manual_review_required
@@ -958,8 +1312,9 @@ export default async function AuthorityComplaintsPage({
                     const effectiveClusterId = getEffectiveClusterId(complaint, ai);
                     const pairKey = `${getAreaName(complaint)}__${finalCategory}`;
 
-                    const isSavedCluster =
-                      Boolean(effectiveClusterId && (clusterCounts.get(effectiveClusterId) ?? 0) > 1);
+                    const isSavedCluster = Boolean(
+                      effectiveClusterId && (clusterCounts.get(effectiveClusterId) ?? 0) > 1
+                    );
 
                     const isRepeatedPattern = (repeatedPatternCounts.get(pairKey) ?? 0) > 1;
 
@@ -977,31 +1332,54 @@ export default async function AuthorityComplaintsPage({
                             <h3 className={styles.complaintsManagementTitle}>
                               {complaint.title || "Untitled complaint"}
                             </h3>
+
                             <span className={statusClass(complaint.status)}>
                               {complaint.status}
                             </span>
                           </div>
 
                           <p className={styles.complaintsManagementMeta}>
-                            Submitted {formatDate(complaint.created_at)} • Area: {getAreaName(complaint)} • Reporter: {complaint.reporter_name || "Unknown"}
+                            Submitted {formatDate(complaint.created_at)} • Area:{" "}
+                            {getAreaName(complaint)} • Reporter:{" "}
+                            {complaint.reporter_name || "Unknown"}
                           </p>
 
                           <div className={styles.chipRow}>
                             <span className={styles.chip}>Final: {finalCategory}</span>
+
+                            <span
+                              className={
+                                routingStatus === "needs_routing_review"
+                                  ? styles.chipWarn
+                                  : styles.chip
+                              }
+                              title={assignedOfficeName || "No responsible authority assigned yet"}
+                            >
+                              Authority: {compactAuthorityName(assignedOfficeName)}
+                            </span>
+
+                            <span className={styles.chip}>
+                              Department: {responsibleDepartment}
+                            </span>
+
                             <span className={reliabilityClass(reliability)}>
                               {manualReviewRequired
                                 ? "Manual review needed"
                                 : reliabilityLabel(reliability)}
                             </span>
+
                             <span className={styles.chip}>
                               Queue {priorityRank != null ? ordinal(priorityRank) : "N/A"}
                             </span>
+
                             <span className={styles.chip}>
                               Urgency {urgencyScore != null ? nicePercent(urgencyScore) : "N/A"}
                             </span>
+
                             {savedDuplicateIds.length > 0 ? (
                               <span className={styles.chipWarn}>Duplicate linked</span>
                             ) : null}
+
                             {isSavedCluster ? (
                               <span className={styles.chipWarn}>Repeated cluster</span>
                             ) : isRepeatedPattern ? (

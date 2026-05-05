@@ -590,8 +590,8 @@ export default async function AuthorityAnalyticsPage() {
   if (!profile?.is_verified) {
     redirect("/login?next=/authority/analytics&verify=1");
   }
-
-  if (profile.role !== "authority") {
+  
+  if (profile.role !== "admin") {
     redirect("/");
   }
 
@@ -855,7 +855,7 @@ export default async function AuthorityAnalyticsPage() {
                 <Link href="/authority/analytics" className={styles.sidebarLinkActive}>
                   Authority analytics
                 </Link>
-                
+
               </nav>
             </div>
           </aside>

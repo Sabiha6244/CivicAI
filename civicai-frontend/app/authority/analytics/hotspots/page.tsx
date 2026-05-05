@@ -123,7 +123,7 @@ export default async function AuthorityAnalyticsHotspotsPage() {
         redirect("/login?next=/authority/analytics/hotspots&verify=1");
     }
 
-    if (profile.role !== "authority") {
+    if (profile.role !== "admin") {
         redirect("/");
     }
 
@@ -238,7 +238,7 @@ export default async function AuthorityAnalyticsHotspotsPage() {
                                 <Link href="/" className={styles.sidebarLink}>
                                     Back to homepage
                                 </Link>
-                                
+
                                 <Link href="/authority" className={styles.sidebarLink}>
                                     Authority dashboard
                                 </Link>

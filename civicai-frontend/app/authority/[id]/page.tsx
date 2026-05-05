@@ -29,6 +29,28 @@ type ComplaintDetail = {
   final_category: string | null;
   category_source: string | null;
   cluster_id: string | null;
+  assigned_office_id: string | null;
+  routing_status: string | null;
+  routing_note: string | null;
+  routed_at: string | null;
+  assigned_office: AssignedOfficeRow | AssignedOfficeRow[] | null;
+  responsible_department_type: string | null;
+  responsible_department_label: string | null;
+  routing_model: string | null;
+};
+
+type AssignedOfficeRow = {
+  office_name: string | null;
+  office_type: string | null;
+  division: string | null;
+  district: string | null;
+  upazila: string | null;
+  city_area: string | null;
+  coverage_level: string | null;
+  authority_body_type: string | null;
+  service_area_name: string | null;
+  is_verified_office: boolean | null;
+  verification_status: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -341,6 +363,20 @@ function urgencyExplanation(
   return reasons.join(" ");
 }
 
+function getAssignedOffice(
+  value: AssignedOfficeRow | AssignedOfficeRow[] | null
+) {
+  if (!value) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+
+  return value;
+}
+
 export default async function AuthorityComplaintDetailPage({
   params,
 }: {
@@ -381,34 +417,57 @@ export default async function AuthorityComplaintDetailPage({
     redirect(`/login?next=/authority/${id}&verify=1`);
   }
 
-  if (profile.role !== "authority") {
+  const isAdmin = profile.role === "admin";
+  const isLocalAuthority = profile.role === "authority";
+
+  if (!isAdmin && !isLocalAuthority) {
     redirect("/");
   }
 
   const { data: complaintData, error } = await supabase
     .from("complaints")
     .select(`
-      id,
-      title,
-      description,
-      reporter_name,
-      division,
-      district,
-      upazila,
-      city_area,
-      location_details,
-      address_label,
-      lat,
-      lng,
-      status,
-      resolution_note,
-      resolved_at,
-      created_at,
-      user_category,
-      final_category,
-      category_source,
-cluster_id
-    `)
+  id,
+  title,
+  description,
+  reporter_name,
+  division,
+  district,
+  upazila,
+  city_area,
+  location_details,
+  address_label,
+  lat,
+  lng,
+  status,
+  resolution_note,
+  resolved_at,
+  created_at,
+  user_category,
+  final_category,
+  category_source,
+  cluster_id,
+  assigned_office_id,
+  routing_status,
+  routing_note,
+  routed_at,
+  responsible_department_type,
+  responsible_department_label,
+  routing_model,
+  assigned_office:authority_offices (
+    office_name,
+    office_type,
+    authority_body_type,
+    service_area_name,
+    division,
+    district,
+    upazila,
+    city_area,
+    coverage_level,
+    is_verified_office,
+    verification_status
+  )
+`)
     .eq("id", id)
     .single();
 
@@ -416,11 +475,27 @@ cluster_id
     notFound();
   }
 
-  const complaint = complaintData as ComplaintDetail;
+  const complaint = complaintData as unknown as ComplaintDetail;
   const areaText =
     [complaint.city_area, complaint.upazila, complaint.district]
       .filter(Boolean)
       .join(", ") || "Not provided";
+
+  const assignedOffice = getAssignedOffice(complaint.assigned_office);
+  const assignedOfficeName =
+    assignedOffice?.office_name || "No responsible authority assigned yet";
+
+  const responsibleDepartment =
+    complaint.responsible_department_label ||
+    (assignedOffice?.office_type ? humanizeValue(assignedOffice.office_type) : "Not available");
+
+  const routingStatus = complaint.routing_status
+    ? humanizeValue(complaint.routing_status)
+    : "Unassigned";
+
+  const routingNote =
+    complaint.routing_note ||
+    "This complaint has not been routed to a responsible authority yet.";
 
   const [{ data: mediaRows }, { data: inferenceRow }] = await Promise.all([
     supabase
@@ -605,39 +680,49 @@ cluster_id
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority-complaints" showAuthority={true} />
-
+      <MobileUserMenu active="authority-complaints" showAuthority={isAdmin} />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
             <div className={styles.sidebarCard}>
-              <p className={styles.sidebarEyebrow}>Authority workspace</p>
+              <p className={styles.sidebarEyebrow}>
+                {isAdmin ? "Central authority workspace" : "Local authority workspace"}
+              </p>
               <h2 className={styles.sidebarTitle}>Complaint review</h2>
               <p className={styles.sidebarText}>
-                Inspect the complaint, review AI outputs, and save status or
-                resolution updates from the action panel.
+                {isAdmin
+                  ? "Inspect the complaint, review AI outputs, and manage central complaint decisions."
+                  : "Review this assigned complaint, confirm evidence, and save local authority updates."}
               </p>
 
               <nav className={styles.sidebarNav}>
-                
                 <Link href="/authority" className={styles.sidebarLink}>
-                  Authority dashboard
+                  {isAdmin ? "Authority dashboard" : "Local dashboard"}
                 </Link>
+
                 <Link href={`/authority/${id}`} className={styles.sidebarLinkActive}>
                   Current complaint
                 </Link>
+
                 <Link href="/authority/complaints" className={styles.sidebarLink}>
-                  Manage complaints
+                  {isAdmin ? "Manage complaints" : "Assigned complaints"}
                 </Link>
 
-                <Link href="/authority/analytics" className={styles.sidebarLink}>
-                  Open analytics
-                </Link>
+                {isAdmin ? (
+                  <>
+                    <Link href="/authority/analytics" className={styles.sidebarLink}>
+                      Open analytics
+                    </Link>
 
-                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
-                  View hotspots
-                </Link>
+                    <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                      View hotspots
+                    </Link>
 
+                    <Link href="/authority/registry" className={styles.sidebarLink}>
+                      Authority registry
+                    </Link>
+                  </>
+                ) : null}
               </nav>
             </div>
           </aside>
@@ -646,13 +731,15 @@ cluster_id
             <section className={styles.detailHero}>
               <div className={styles.detailTop}>
                 <div className={styles.detailMetaBlock}>
-                  <p className={styles.eyebrow}>Authority review</p>
-                  <h1 className={styles.title}>
+                  <p className={styles.eyebrow}>
+                    {isAdmin ? "Central authority review" : "Local authority review"}
+                  </p>                  <h1 className={styles.title}>
                     {complaint.title || "Complaint detail"}
                   </h1>
                   <p className={styles.subtitle}>
-                    Review this case, confirm the operational category, and publish
-                    a cleaner authority update from the action panel.
+                    {isAdmin
+                      ? "Review this case, confirm the operational category, and publish a cleaner authority update from the action panel."
+                      : "Review this assigned case, confirm the operational category, and save the local authority status update."}
                   </p>
 
                   <div className={styles.detailMetaRow}>
@@ -686,6 +773,29 @@ cluster_id
                     <div className={styles.highlightBox}>
                       <p className={styles.kvLabel}>Current working category</p>
                       <p className={styles.kvValue}>{humanizeValue(finalOperationalCategory)}</p>
+                    </div>
+
+                    <div className={styles.infoBox}>
+
+                      <p className={styles.kvLabel}>Responsible authority</p>
+                      <p className={styles.kvValue}>{assignedOfficeName}</p>
+                    </div>
+
+                    <div className={styles.kvGrid}>
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Responsible department</p>
+                        <p className={styles.kvValue}>{responsibleDepartment}</p>
+                      </div>
+
+                      <div className={styles.infoBox}>
+                        <p className={styles.kvLabel}>Routing status</p>
+                        <p className={styles.kvValue}>{routingStatus}</p>
+                      </div>
+                    </div>
+
+                    <div className={styles.infoBox}>
+                      <p className={styles.kvLabel}>Routing explanation</p>
+                      <p className={styles.kvValue}>{routingNote}</p>
                     </div>
 
                     <div className={styles.aiStatGrid}>

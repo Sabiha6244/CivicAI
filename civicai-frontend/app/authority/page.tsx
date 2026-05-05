@@ -20,6 +20,9 @@ type ComplaintRow = {
   user_category: string | null;
   final_category: string | null;
   category_source: string | null;
+  assigned_office_id: string | null;
+  duplicate_of: string | null;
+  cluster_id: string | null;
 };
 
 type ComplaintMediaRow = {
@@ -39,6 +42,10 @@ type InferenceRow = {
   model_versions: Record<string, string> | null;
   image_labels?: string[] | null;
   image_confidences?: number[] | null;
+};
+
+type AuthorityOfficeAccessRow = {
+  office_id: string | null;
 };
 
 type RankedItem = {
@@ -74,6 +81,92 @@ function parseNumber(value?: string | null) {
 function parseBoolean(value?: string | null) {
   if (!value) return false;
   return value.toLowerCase() === "true";
+}
+
+function parseStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(String)
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+  }
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+
+    if (!raw || raw === "[]" || raw.toLowerCase() === "null") {
+      return [];
+    }
+
+    if (raw.startsWith("[") && raw.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map(String)
+            .map((v) => v.trim())
+            .filter(Boolean)
+            .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+        }
+      } catch { }
+    }
+
+    return raw
+      .split(",")
+      .map((v) =>
+        v
+          .trim()
+          .replace(/^\[/, "")
+          .replace(/\]$/, "")
+          .replace(/^"+|"+$/g, "")
+          .replace(/^'+|'+$/g, "")
+      )
+      .filter(Boolean)
+      .filter((v) => v !== "[]" && v.toLowerCase() !== "null");
+  }
+
+  return [];
+}
+
+function getSavedDuplicateIds(ai?: InferenceRow | null): string[] {
+  return parseStringList(ai?.model_versions?.duplicate_ids);
+}
+
+function normalizeIdList(ids: string[]): string[] {
+  return Array.from(new Set(ids.map((v) => v.trim()).filter(Boolean)));
+}
+
+function getReciprocalDuplicateIds(
+  complaintId: string,
+  duplicateMap: Map<string, string[]>
+): string[] {
+  const ownIds = duplicateMap.get(complaintId) ?? [];
+
+  return ownIds.filter((otherId) => {
+    const otherIds = duplicateMap.get(otherId) ?? [];
+    return otherIds.includes(complaintId);
+  });
+}
+
+function getEffectiveClusterId(
+  complaint: ComplaintRow,
+  ai?: InferenceRow | null
+): string | null {
+  const fromComplaint =
+    typeof complaint.cluster_id === "string" && complaint.cluster_id.trim()
+      ? complaint.cluster_id.trim()
+      : null;
+
+  if (fromComplaint) return fromComplaint;
+
+  const fromModelVersions =
+    typeof ai?.model_versions?.cluster_id === "string" &&
+      ai.model_versions.cluster_id.trim()
+      ? ai.model_versions.cluster_id.trim()
+      : null;
+
+  return fromModelVersions;
 }
 
 function nicePercent(value?: number | null) {
@@ -193,12 +286,16 @@ function buildComplaintsHref({
   area,
   category,
   source,
+  duplicate,
+  pattern,
 }: {
   status?: string;
   review?: string;
   area?: string;
   category?: string;
   source?: string;
+  duplicate?: string;
+  pattern?: string;
 }) {
   const search = new URLSearchParams();
   if (status) search.set("status", status);
@@ -206,6 +303,8 @@ function buildComplaintsHref({
   if (area) search.set("area", area);
   if (category) search.set("category", category);
   if (source) search.set("source", source);
+  if (duplicate) search.set("duplicate", duplicate);
+  if (pattern) search.set("pattern", pattern);
 
   const qs = search.toString();
   return qs ? `/authority/complaints?${qs}` : "/authority/complaints";
@@ -578,13 +677,52 @@ export default async function AuthorityPage() {
     redirect("/login?next=/authority&verify=1");
   }
 
-  if (profile.role !== "authority") {
+  const isAdmin = profile.role === "admin";
+  const isLocalAuthority = profile.role === "authority";
+
+  if (!isAdmin && !isLocalAuthority) {
     redirect("/");
   }
 
-  const { data: complaintsData, error: complaintsError } = await supabase
-    .from("complaints")
-    .select(`
+  let linkedOfficeIds: string[] = [];
+
+  if (isLocalAuthority) {
+    const { data: officeAccessRows, error: officeAccessError } = await supabase
+      .from("authority_office_users")
+      .select("office_id")
+      .eq("user_id", user.id)
+      .eq("access_status", "active");
+
+    if (officeAccessError) {
+      return (
+        <main className={styles.page}>
+          <div className={styles.wrapper}>
+            <div className={styles.alertBox}>
+              Failed to load your authority office access:{" "}
+              {officeAccessError.message}
+            </div>
+          </div>
+        </main>
+      );
+    }
+
+    linkedOfficeIds = Array.from(
+      new Set(
+        ((officeAccessRows ?? []) as AuthorityOfficeAccessRow[])
+          .map((row) => row.office_id)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+  }
+  let complaintsData: unknown[] | null = [];
+  let complaintsError: { message: string } | null = null;
+
+  if (isLocalAuthority && linkedOfficeIds.length === 0) {
+    complaintsData = [];
+  } else {
+    let complaintsQuery = supabase
+      .from("complaints")
+      .select(`
       id,
       title,
       description,
@@ -597,9 +735,21 @@ export default async function AuthorityPage() {
       created_at,
       user_category,
       final_category,
-      category_source
+      category_source,
+      assigned_office_id,
+      duplicate_of,
+      cluster_id
     `)
-    .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false });
+
+    if (isLocalAuthority) {
+      complaintsQuery = complaintsQuery.in("assigned_office_id", linkedOfficeIds);
+    }
+
+    const result = await complaintsQuery;
+    complaintsData = result.data;
+    complaintsError = result.error;
+  }
 
   if (complaintsError) {
     return (
@@ -654,6 +804,29 @@ export default async function AuthorityPage() {
     }
   }
 
+  const savedDuplicateMap = new Map<string, string[]>();
+
+  for (const complaint of complaints) {
+    const ai = inferenceByComplaint.get(complaint.id);
+    const duplicateIds = normalizeIdList(getSavedDuplicateIds(ai));
+    savedDuplicateMap.set(complaint.id, duplicateIds);
+  }
+
+  const clusterCounts = new Map<string, number>();
+
+  for (const complaint of complaints) {
+    const ai = inferenceByComplaint.get(complaint.id);
+    const effectiveClusterId = getEffectiveClusterId(complaint, ai);
+
+    if (effectiveClusterId) {
+      clusterCounts.set(
+        effectiveClusterId,
+        (clusterCounts.get(effectiveClusterId) ?? 0) + 1
+      );
+    }
+  }
+
+
   const submittedComplaints = complaints.filter((item) => item.status === "submitted");
 
   const totalComplaints = complaints.length;
@@ -674,6 +847,19 @@ export default async function AuthorityPage() {
     const ai = inferenceByComplaint.get(item.id);
     const citizenAiConflict = parseBoolean(ai?.model_versions?.citizen_ai_conflict);
     return !!ai?.conflict_flag || citizenAiConflict;
+  }).length;
+
+  const duplicateLinkedCount = complaints.filter((item) => {
+    return getReciprocalDuplicateIds(item.id, savedDuplicateMap).length > 0;
+  }).length;
+
+  const repeatedClusterCount = complaints.filter((item) => {
+    const ai = inferenceByComplaint.get(item.id);
+    const effectiveClusterId = getEffectiveClusterId(item, ai);
+
+    return Boolean(
+      effectiveClusterId && (clusterCounts.get(effectiveClusterId) ?? 0) > 1
+    );
   }).length;
 
   const categoryCounts = new Map<string, number>();
@@ -773,6 +959,30 @@ export default async function AuthorityPage() {
     .sort((a, b) => (a.rank! - b.rank!))
     .slice(0, 3);
 
+  const duplicateOrRepeatedComplaints = complaints
+    .map((complaint) => {
+      const ai = inferenceByComplaint.get(complaint.id);
+      const duplicateIds = getReciprocalDuplicateIds(complaint.id, savedDuplicateMap);
+      const effectiveClusterId = getEffectiveClusterId(complaint, ai);
+      const clusterSize = effectiveClusterId
+        ? clusterCounts.get(effectiveClusterId) ?? 0
+        : 0;
+
+      return {
+        complaint,
+        ai,
+        duplicateIds,
+        effectiveClusterId,
+        clusterSize,
+      };
+    })
+    .filter(
+      (item) =>
+        item.duplicateIds.length > 0 ||
+        Boolean(item.effectiveClusterId && item.clusterSize > 1)
+    )
+    .slice(0, 3);
+
   const reviewQueueComplaints = submittedComplaints
     .map((complaint) => {
       const ai = inferenceByComplaint.get(complaint.id);
@@ -787,48 +997,87 @@ export default async function AuthorityPage() {
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority" showAuthority={true} />
-
+      <MobileUserMenu active="authority" showAuthority={isAdmin} />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
             <div className={styles.sidebarCard}>
-              <p className={styles.sidebarEyebrow}>Authority workspace</p>
+              <p className={styles.sidebarEyebrow}>
+                {isAdmin ? "Central authority workspace" : "Local authority workspace"}
+              </p>
               <h2 className={styles.sidebarTitle}>Dashboard</h2>
               <p className={styles.sidebarText}>
-                Review complaint submissions, inspect AI suggestions, and focus on
-                the cases that still need first authority attention.
+                {isAdmin
+                  ? "Manage central authority operations."
+                  : "Review only the complaints assigned to your approved authority office."}
               </p>
 
               <nav className={styles.sidebarNav}>
                 <Link href="/" className={styles.sidebarLink}>
                   Back to homepage
                 </Link>
-              
-                <Link href="/authority" className={styles.sidebarLinkActive}>
-                  Authority dashboard
-                </Link>
-                <Link href="/authority/complaints" className={styles.sidebarLink}>
-                  Manage complaints
-                </Link>
-                <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
-                  View hotspots
-                </Link>
-                <Link href="/authority/analytics" className={styles.sidebarLink}>
-                  Open analytics
-                </Link>
+
+                {isAdmin ? (
+                  <>
+                    <Link href="/authority" className={styles.sidebarLinkActive}>
+                      Authority dashboard
+                    </Link>
+                    <Link href="/authority/complaints" className={styles.sidebarLink}>
+                      Manage complaints
+                    </Link>
+                    <Link href="/authority/registry" className={styles.sidebarLink}>
+                      Authority service desk
+                    </Link>
+                    <Link href="/authority/analytics/hotspots" className={styles.sidebarLink}>
+                      View hotspots
+                    </Link>
+                    <Link href="/authority/analytics" className={styles.sidebarLink}>
+                      Open analytics
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <Link href="/authority" className={styles.sidebarLinkActive}>
+                      Local dashboard
+                    </Link>
+                    <Link href="/authority/complaints" className={styles.sidebarLink}>
+                      Assigned complaints
+                    </Link>
+                    <Link href="/report" className={styles.sidebarLink}>
+                      Create report
+                    </Link>
+                    <Link href="/my-profile" className={styles.sidebarLink}>
+                      My profile
+                    </Link>
+                  </>
+                )}
               </nav>
             </div>
           </aside>
 
           <div className={styles.mainContent}>
             <section className={styles.hero}>
-              <p className={styles.eyebrow}>Authority review workspace</p>
-              <h1 className={styles.title}>Complaint operations dashboard</h1>
-              <p className={styles.subtitle}>
-                A cleaner authority dashboard for first-review triage, daily
-                monitoring, and quick movement into detailed complaint handling.
+              <p className={styles.eyebrow}>
+                {isAdmin ? "Central authority review workspace" : "Local authority review workspace"}
               </p>
+              <h1 className={styles.title}>
+                {isAdmin ? "Complaint operations dashboard" : "Assigned complaints dashboard"}
+              </h1>
+              <p className={styles.subtitle}>
+                {isAdmin
+                  ? "A cleaner authority dashboard for first-review triage, daily monitoring, and quick movement into detailed complaint handling."
+                  : "A scoped dashboard for complaints assigned to your approved authority office, including priority queue, review flags, duplicates, and local area hotspots."}
+              </p>
+
+              {isLocalAuthority && linkedOfficeIds.length === 0 ? (
+                <div className={styles.warningBox} style={{ marginTop: 18 }}>
+                  <p className={styles.kvLabel}>No linked authority office</p>
+                  <p className={styles.kvValue}>
+                    Your account has authority access, but it is not linked to an active
+                    service desk yet. Please contact central authority.
+                  </p>
+                </div>
+              ) : null}
 
               <div className={styles.statStrip}>
                 <MetricCard
@@ -855,6 +1104,20 @@ export default async function AuthorityPage() {
                   text="Cases where complaint signals do not align cleanly."
                   href={buildComplaintsHref({ review: "conflict" })}
                 />
+
+                <MetricCard
+                  label="Duplicate linked"
+                  value={duplicateLinkedCount}
+                  text="Complaints linked to another complaint within this visible authority scope."
+                  href={buildComplaintsHref({ duplicate: "linked" })}
+                />
+
+                <MetricCard
+                  label="Repeated clusters"
+                  value={repeatedClusterCount}
+                  text="Complaints that belong to repeated saved issue clusters in this scope."
+                  href={buildComplaintsHref({ pattern: "repeated" })}
+                />
               </div>
             </section>
 
@@ -869,11 +1132,14 @@ export default async function AuthorityPage() {
 
                 <div className={styles.complaintsFilterActions}>
                   <Link href="/authority/complaints" className={styles.primaryLink}>
-                    Manage complaints
+                    {isAdmin ? "Manage complaints" : "Open assigned complaints"}
                   </Link>
-                  <Link href="/authority/analytics" className={styles.secondaryLink}>
-                    Open analytics
-                  </Link>
+
+                  {isAdmin ? (
+                    <Link href="/authority/analytics" className={styles.secondaryLink}>
+                      Open analytics
+                    </Link>
+                  ) : null}
                 </div>
               </div>
 
@@ -1032,6 +1298,32 @@ export default async function AuthorityPage() {
                   })}
                 />
 
+                <InboxPanel
+                  title="Duplicate / repeated issues"
+                  subtitle="Complaints linked as duplicates or grouped into repeated issue clusters within this authority scope."
+                  emptyText="No duplicate-linked or repeated-cluster complaints are visible in this scope right now."
+                  badgeClass={styles.chipWarn}
+                  items={duplicateOrRepeatedComplaints.map(
+                    ({ complaint, duplicateIds, clusterSize }) => {
+                      const fullTitle = complaint.title || "Untitled complaint";
+                      const badge =
+                        duplicateIds.length > 0
+                          ? `${duplicateIds.length} duplicate`
+                          : `${clusterSize} cluster`;
+
+                      return {
+                        id: complaint.id,
+                        title: shortenText(fullTitle, 30),
+                        fullTitle,
+                        meta: `${getAreaName(complaint)} • ${formatDate(
+                          complaint.created_at
+                        )}`,
+                        badge,
+                      };
+                    }
+                  )}
+                />
+
                 <article className={styles.dashboardInboxCard}>
                   <div className={styles.dashboardInboxHeader}>
                     <div>
@@ -1182,7 +1474,9 @@ export default async function AuthorityPage() {
                 <div>
                   <h2 className={styles.sectionTitle}>Area overview</h2>
                   <p className={styles.sectionText}>
-                    Overall hotspot areas across the full complaint dataset, including already reviewed complaints.
+                    {isAdmin
+                      ? "Overall hotspot areas across the full complaint dataset, including already reviewed complaints."
+                      : "Local hotspot areas based only on complaints assigned to your authority office."}
                   </p>
                 </div>
               </div>

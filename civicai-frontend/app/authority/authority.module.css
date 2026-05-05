@@ -2140,3 +2140,905 @@
     padding-top: 18px;
   }
 }
+
+/* =========================================================
+   Authority Registry - Search, Pagination, Actions
+   ========================================================= */
+
+.registryBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 18px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(8, 48, 54, 0.55));
+  border-radius: 20px;
+  padding: 16px 18px;
+}
+
+.registryBannerIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(45, 212, 191, 0.32);
+  background: rgba(13, 148, 136, 0.16);
+  color: #ccfbf1;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.registryBannerText {
+  margin: 0;
+  color: #d9ecff;
+  font-size: 0.98rem;
+  line-height: 1.65;
+}
+
+.registryAddButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: 14px;
+  padding: 12px 16px;
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 900;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.registryAddButton:hover {
+  transform: translateY(-1px);
+  background: #115e59;
+  border-color: #5eead4;
+}
+
+.registryFilterForm {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.03));
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.14);
+}
+
+.registryFilterGrid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 14px;
+  align-items: end;
+}
+
+.registryFilterActions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.registryScopeTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.registryScopeTab,
+.registryScopeTabActive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 9px 13px;
+  font-size: 0.84rem;
+  font-weight: 900;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.registryScopeTab {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.045);
+  color: #cbd5e1;
+}
+
+.registryScopeTab:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.registryScopeTabActive {
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  background: rgba(20, 184, 166, 0.14);
+  color: #ccfbf1;
+}
+
+.registryTableCard {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(8, 22, 37, 0.96)),
+    rgba(15, 23, 42, 0.92);
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.26);
+}
+
+.registryTableTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.1), transparent 36%),
+    rgba(15, 23, 42, 0.7);
+}
+
+.registryTableTitle {
+  margin: 0 0 6px;
+  color: #f8fafc;
+  font-size: 1.08rem;
+  line-height: 1.3;
+  font-weight: 900;
+}
+
+.registryTableSubtitle {
+  margin: 0;
+  max-width: 780px;
+  color: #9fb1cf;
+  font-size: 0.94rem;
+  line-height: 1.6;
+}
+
+.registryTableCount {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  background: rgba(20, 184, 166, 0.1);
+  color: #ccfbf1;
+  border-radius: 999px;
+  padding: 9px 13px;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.registryTableScroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.registryDataTable {
+  width: 100%;
+  min-width: 1180px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.registryDataTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 14px 18px;
+  background: rgba(15, 31, 55, 0.98);
+  color: #aebfe2;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  white-space: nowrap;
+}
+
+.registryDataTable tbody td {
+  padding: 18px;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  color: #e8f0ff;
+}
+
+.registryDataTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.registryDataTable tbody tr {
+  transition:
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.registryDataTable tbody tr:hover {
+  background: rgba(45, 212, 191, 0.045);
+}
+
+.registryColDesk {
+  width: 320px;
+}
+
+.registryColType {
+  width: 150px;
+}
+
+.registryColArea {
+  width: 170px;
+}
+
+.registryColDistrict {
+  width: 140px;
+}
+
+.registryColComplaints {
+  width: 105px;
+}
+
+.registryColSetup {
+  width: 180px;
+}
+
+.registryColActions {
+  width: 230px;
+}
+
+.registryColRequester {
+  width: 230px;
+}
+
+.registryColRequestedDesk {
+  width: 260px;
+}
+
+.registryColContact {
+  width: 210px;
+}
+
+.registryColStatus {
+  width: 130px;
+}
+
+.registryColSubmitted {
+  width: 180px;
+}
+
+.registryColNote {
+  width: 270px;
+}
+
+.registryDeskCell {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.registryDeskIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 15px;
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  background:
+    linear-gradient(135deg, rgba(20, 184, 166, 0.22), rgba(15, 23, 42, 0.66));
+  color: #ccfbf1;
+  font-size: 0.78rem;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.registryDeskContent {
+  min-width: 0;
+}
+
+.registryDeskTitle {
+  margin: 0;
+  color: #ffffff;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  font-weight: 900;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.registryDeskNote {
+  display: -webkit-box;
+  margin: 7px 0 0;
+  color: #9fb1cf;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.registryInfoStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.registryStrongText {
+  color: #f8fafc;
+  font-size: 0.94rem;
+  line-height: 1.45;
+  font-weight: 800;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.registrySmallText {
+  color: #98abc9;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  font-weight: 650;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.registryBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.registryBadgeTeal {
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  background: rgba(20, 184, 166, 0.1);
+  color: #ccfbf1;
+}
+
+.registryBadgeWarning {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.11);
+  color: #fde68a;
+}
+
+.registryBadgeSuccess {
+  border: 1px solid rgba(134, 239, 172, 0.24);
+  background: rgba(20, 83, 45, 0.24);
+  color: #bbf7d0;
+}
+
+.registryBadgeDanger {
+  border: 1px solid rgba(252, 165, 165, 0.24);
+  background: rgba(127, 29, 29, 0.24);
+  color: #fecaca;
+}
+
+.registryBadgeMuted {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(30, 41, 59, 0.58);
+  color: #cbd5e1;
+}
+
+.registryCountBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.68);
+  color: #ffffff;
+  font-size: 0.98rem;
+  font-weight: 950;
+}
+
+.registryCenterCell {
+  text-align: center !important;
+}
+
+.registryActionGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.registryActionButton,
+.registryActionButtonWarning,
+.registryActionButtonDanger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 0.76rem;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.registryActionButton {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.055);
+  color: #e2e8f0;
+}
+
+.registryActionButton:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.registryActionButtonWarning {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+}
+
+.registryActionButtonWarning:hover {
+  transform: translateY(-1px);
+  background: rgba(251, 191, 36, 0.16);
+}
+
+.registryActionButtonDanger {
+  border: 1px solid rgba(252, 165, 165, 0.24);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+}
+
+.registryActionButtonDanger:hover {
+  transform: translateY(-1px);
+  background: rgba(127, 29, 29, 0.32);
+}
+
+.registryRequestNote {
+  display: -webkit-box;
+  margin: 0;
+  color: #b7c7df;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.registryPagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.registryPaginationInfo {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.registryPaginationActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.registryPageIndicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 800;
+  padding: 0 6px;
+}
+
+@media (max-width: 1320px) {
+  .registryFilterGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .registryDataTable {
+    min-width: 1120px;
+  }
+}
+
+@media (max-width: 760px) {
+  .registryBanner {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .registryBannerIcon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .registryBannerText {
+    font-size: 0.92rem;
+  }
+
+  .registryFilterGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .registryFilterActions {
+    align-items: stretch;
+  }
+
+  .registryFilterActions .primaryButton,
+  .registryFilterActions .secondaryLink {
+    width: 100%;
+  }
+
+  .registryTableCard {
+    border-radius: 18px;
+  }
+
+  .registryTableTop {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .registryTableCount {
+    width: fit-content;
+  }
+
+  .registryDataTable {
+    min-width: 1040px;
+  }
+
+  .registryDataTable thead th,
+  .registryDataTable tbody td {
+    padding: 14px;
+  }
+
+  .registryDeskTitle {
+    font-size: 0.93rem;
+  }
+
+  .registryDeskNote,
+  .registrySmallText,
+  .registryRequestNote {
+    font-size: 0.82rem;
+  }
+
+  .registryStrongText {
+    font-size: 0.9rem;
+  }
+
+  .registryPagination {
+    align-items: stretch;
+  }
+
+  .registryPaginationActions {
+    width: 100%;
+  }
+
+  .registryPaginationActions .secondaryLink,
+  .registryPaginationActions .complaintsPaginationDisabled {
+    flex: 1 1 0;
+  }
+}
+
+.registryDeskMeta {
+  margin: 6px 0 0;
+  color: #8fb2d4;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  font-weight: 700;
+}
+
+.registryColDesk {
+  width: 300px;
+}
+
+.registryColArea {
+  width: 190px;
+}
+
+.registryColDistrict {
+  width: 150px;
+}
+
+.registryColComplaints {
+  width: 110px;
+}
+
+.registryColSetup {
+  width: 190px;
+}
+
+.registryColActions {
+  width: 240px;
+}
+
+.registryBadgeInfo {
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+}
+
+.registryActionView,
+.registryActionEdit,
+.registryActionDisable,
+.registryActionDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  text-decoration: none;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.registryActionView {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.72);
+  color: #e2e8f0;
+}
+
+.registryActionView:hover {
+  transform: translateY(-1px);
+  background: rgba(51, 65, 85, 0.9);
+}
+
+.registryActionEdit {
+  border: 1px solid rgba(45, 212, 191, 0.26);
+  background: rgba(13, 148, 136, 0.16);
+  color: #ccfbf1;
+}
+
+.registryActionEdit:hover {
+  transform: translateY(-1px);
+  background: rgba(13, 148, 136, 0.24);
+}
+
+.registryActionDisable {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+}
+
+.registryActionDisable:hover {
+  transform: translateY(-1px);
+  background: rgba(245, 158, 11, 0.24);
+}
+
+.registryActionDelete {
+  border: 1px solid rgba(252, 165, 165, 0.28);
+  background: rgba(220, 38, 38, 0.18);
+  color: #fecaca;
+}
+
+.registryActionDelete:hover {
+  transform: translateY(-1px);
+  background: rgba(220, 38, 38, 0.28);
+}
+
+.registryFilterGridCompact {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 14px;
+  align-items: end;
+}
+
+@media (max-width: 980px) {
+  .registryFilterGridCompact {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   Authority Registry - Compact Table Refinement
+   ========================================================= */
+
+.registryDataTable {
+  min-width: 980px;
+}
+
+.registryDataTable thead th {
+  padding: 12px 14px;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+}
+
+.registryDataTable tbody td {
+  padding: 13px 14px;
+}
+
+.registryColDesk {
+  width: 275px;
+}
+
+.registryColArea {
+  width: 155px;
+}
+
+.registryColDistrict {
+  width: 125px;
+}
+
+.registryColComplaints {
+  width: 90px;
+}
+
+.registryColSetup {
+  width: 145px;
+}
+
+.registryColActions {
+  width: 190px;
+}
+
+.registryDeskIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 13px;
+  font-size: 0.72rem;
+}
+
+.registryDeskCell {
+  gap: 11px;
+}
+
+.registryDeskTitle {
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.registryDeskMeta {
+  margin-top: 4px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.registryStrongText {
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.registrySmallText {
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.registryBadge {
+  padding: 6px 9px;
+  font-size: 0.72rem;
+}
+
+.registryCountBadge {
+  min-width: 36px;
+  height: 32px;
+  font-size: 0.86rem;
+}
+
+.registryActionGroup {
+  gap: 6px;
+}
+
+.registryActionView,
+.registryActionEdit,
+.registryActionDisable,
+.registryActionDelete {
+  min-width: 56px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 0.72rem;
+}
+
+.registryTableTop {
+  padding: 16px 18px;
+}
+
+.registryTableTitle {
+  font-size: 1rem;
+}
+
+.registryTableSubtitle {
+  font-size: 0.86rem;
+}
+
+.registryPagination {
+  padding: 13px 16px;
+}
+
+.registryPaginationInfo,
+.registryPageIndicator {
+  font-size: 0.82rem;
+}
+
+@media (max-width: 1320px) {
+  .registryDataTable {
+    min-width: 960px;
+  }
+}
+
+@media (max-width: 760px) {
+  .registryDataTable {
+    min-width: 920px;
+  }
+
+  .registryDataTable thead th,
+  .registryDataTable tbody td {
+    padding: 11px 12px;
+  }
+}
+.registryActionGroup form {
+  margin: 0;
+}
+
+.registryActionGroup button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.registryReviewedText {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  color: #bbf7d0;
+  font-size: 0.78rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.registryReviewNote {
+  margin: 8px 0 0;
+  color: #9fb3d9;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}

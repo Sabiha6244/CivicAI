@@ -27,12 +27,6 @@ import styles from "./home.module.css";
 import ImageLightbox from "./components/ImageLightbox";
 import MobileUserMenu from "./components/MobileUserMenu";
 
-type ComplaintImageRow = {
-  public_url: string | null;
-  original_filename: string | null;
-  created_at: string;
-};
-
 type ComplaintRow = {
   id: string;
   title: string | null;
@@ -41,7 +35,9 @@ type ComplaintRow = {
   address_label: string | null;
   lat: number | null;
   lng: number | null;
-  complaint_media?: ComplaintImageRow[] | null;
+  image_public_url: string | null;
+  image_original_filename: string | null;
+  image_created_at: string | null;
 };
 
 type ProfileRow = {
@@ -135,26 +131,59 @@ export default async function HomePage() {
     profile = profileData;
   }
 
-  const isAuthority =
+  const isCentralAuthority =
+    !!user && profile?.is_verified === true && profile?.role === "admin";
+
+  const isLocalAuthority =
     !!user && profile?.is_verified === true && profile?.role === "authority";
 
+  const isAuthority = isCentralAuthority || isLocalAuthority;
+
+  const workspaceEyebrow = isCentralAuthority
+    ? "Central authority workspace"
+    : isLocalAuthority
+      ? "Local authority workspace"
+      : "Citizen workspace";
+
+  const workspaceTitle = isCentralAuthority
+    ? "Manage authority access, service desks, and complaint operations."
+    : isLocalAuthority
+      ? "Review complaints assigned to your authority office."
+      : "Track public complaints and submit new civic reports.";
+
+  const workspaceText = isCentralAuthority
+    ? "Use the central authority tools to manage access requests, service desk registry, complaint queues, analytics, and routing oversight."
+    : isLocalAuthority
+      ? "Use your authority workspace to review complaints assigned to your linked office after central approval."
+      : "Use your account to report new civic issues and stay informed about recent public complaints in your community.";
+
+  const accessTypeLabel = isCentralAuthority
+    ? "Central authority"
+    : isLocalAuthority
+      ? "Local authority"
+      : "Citizen";
+
+  const summaryRoleLabel = isCentralAuthority
+    ? "verified central authority"
+    : isLocalAuthority
+      ? "verified local authority"
+      : "verified citizen";
+
   const { data: complaints, error } = await supabase
-    .from("complaints")
+    .from("public_complaints_feed")
     .select(
       `
-      id,
-      title,
-      status,
-      created_at,
-      address_label,
-      lat,
-      lng,
-      complaint_media (
-        public_url,
-        original_filename,
-        created_at
-      )
-    `
+    id,
+    title,
+    status,
+    created_at,
+    address_label,
+    lat,
+    lng,
+    image_public_url,
+    image_original_filename,
+    image_created_at
+  `
     )
     .order("created_at", { ascending: false })
     .limit(10);
@@ -497,9 +526,7 @@ export default async function HomePage() {
           ) : (
             <div className={styles.publicComplaintList}>
               {recentComplaints.map((item) => {
-                const imageUrl =
-                  item.complaint_media?.find((media) => !!media.public_url)
-                    ?.public_url ?? null;
+                const imageUrl = item.image_public_url ?? null;
 
                 return (
                   <article key={item.id} className={styles.publicComplaintCard}>
@@ -673,19 +700,11 @@ export default async function HomePage() {
       <section className={styles.dashboardHero}>
         <div className={styles.dashboardHeroTop}>
           <div>
-            <p className={styles.dashboardEyebrow}>
-              {isAuthority ? "Authority workspace" : "Citizen workspace"}
-            </p>
-            <h1 className={styles.dashboardTitle}>
-              {isAuthority
-                ? "Manage complaints and monitor recent public activity."
-                : "Track public complaints and submit new civic reports."}
-            </h1>
-            <p className={styles.dashboardText}>
-              {isAuthority
-                ? "Use your dashboard tools to review incoming complaints, open the authority workspace, and stay updated with the latest public submissions."
-                : "Use your account to report new civic issues and stay informed about recent public complaints in your community."}
-            </p>
+            <p className={styles.dashboardEyebrow}>{workspaceEyebrow}</p>
+
+            <h1 className={styles.dashboardTitle}>{workspaceTitle}</h1>
+
+            <p className={styles.dashboardText}>{workspaceText}</p>
           </div>
 
           <div className={styles.dashboardActions}>
@@ -693,11 +712,31 @@ export default async function HomePage() {
               Report a problem
             </Link>
 
-            {isAuthority ? (
-              <Link href="/authority" className={styles.dashboardSecondary}>
-                Open Authority Dashboard
+            {isCentralAuthority ? (
+              <>
+                <Link href="/authority" className={styles.dashboardSecondary}>
+                  Open Authority Dashboard
+                </Link>
+
+                <Link href="/authority/registry" className={styles.dashboardSecondary}>
+                  Authority Registry
+                </Link>
+              </>
+            ) : isLocalAuthority ? (
+              <>
+                <Link href="/authority" className={styles.dashboardSecondary}>
+                  Open Local Dashboard
+                </Link>
+
+                <Link href="/authority/complaints" className={styles.dashboardSecondary}>
+                  Assigned Complaints
+                </Link>
+              </>
+            ) : (
+              <Link href="/authority/request-access" className={styles.dashboardSecondary}>
+                Request authority access
               </Link>
-            ) : null}
+            )}
           </div>
         </div>
 
@@ -715,7 +754,7 @@ export default async function HomePage() {
           <div className={styles.dashboardStatCard}>
             <p className={styles.dashboardStatLabel}>Access type</p>
             <h2 className={styles.dashboardStatValueSmall}>
-              {isAuthority ? "Authority" : "Citizen"}
+              {accessTypeLabel}
             </h2>
             <p className={styles.dashboardStatSubtext}>
               Current account role in the platform
@@ -746,11 +785,35 @@ export default async function HomePage() {
               <Link href="/" className={styles.loggedActionItem}>
                 Review homepage activity
               </Link>
-              {isAuthority ? (
-                <Link href="/authority" className={styles.loggedActionItem}>
-                  Open authority review workspace
+              {isCentralAuthority ? (
+                <>
+                  <Link href="/authority" className={styles.loggedActionItem}>
+                    Open authority dashboard
+                  </Link>
+
+                  <Link href="/authority/registry" className={styles.loggedActionItem}>
+                    Manage authority registry
+                  </Link>
+
+                  <Link href="/authority/analytics" className={styles.loggedActionItem}>
+                    Open analytics
+                  </Link>
+                </>
+              ) : isLocalAuthority ? (
+                <>
+                  <Link href="/authority" className={styles.loggedActionItem}>
+                    Open local dashboard
+                  </Link>
+
+                  <Link href="/authority/complaints" className={styles.loggedActionItem}>
+                    Open assigned complaints
+                  </Link>
+                </>
+              ) : (
+                <Link href="/authority/request-access" className={styles.loggedActionItem}>
+                  Request authority access
                 </Link>
-              ) : null}
+              )}
             </div>
           </div>
 
@@ -760,7 +823,7 @@ export default async function HomePage() {
             <ul className={styles.loggedSummaryList}>
               <li>
                 Signed in as a{" "}
-                <strong>{isAuthority ? "verified authority" : "verified citizen"}</strong>
+                <strong>{summaryRoleLabel}</strong>
               </li>
               <li>Homepage shows the latest public complaint activity</li>
               <li>Use the left navigation for faster access to important pages</li>
@@ -792,9 +855,7 @@ export default async function HomePage() {
         ) : (
           <div className={styles.complaintListLogged}>
             {recentComplaints.map((item) => {
-              const imageUrl =
-                item.complaint_media?.find((media) => !!media.public_url)
-                  ?.public_url ?? null;
+              const imageUrl = item.image_public_url ?? null;
 
               return (
                 <article key={item.id} className={styles.complaintCardDark}>
@@ -865,9 +926,7 @@ export default async function HomePage() {
         <aside className={styles.sidebar}>
           <div className={styles.sidebarInner}>
             <div className={styles.sidebarBrand}>CivicAI</div>
-            <p className={styles.sidebarText}>
-              Quick navigation for signed-in users.
-            </p>
+            
 
             <nav className={styles.sidebarNav}>
               <Link href="/" className={styles.sidebarLink}>
@@ -888,11 +947,35 @@ export default async function HomePage() {
                 Report complaint
               </Link>
 
-              {isAuthority ? (
-                <Link href="/authority" className={styles.sidebarLinkPrimary}>
-                  Authority dashboard
+              {isCentralAuthority ? (
+                <>
+                  <Link href="/authority" className={styles.sidebarLinkPrimary}>
+                    Authority dashboard
+                  </Link>
+
+                  <Link href="/authority/registry" className={styles.sidebarLink}>
+                    Authority registry
+                  </Link>
+
+                  <Link href="/authority/analytics" className={styles.sidebarLink}>
+                    Open analytics
+                  </Link>
+                </>
+              ) : isLocalAuthority ? (
+                <>
+                  <Link href="/authority" className={styles.sidebarLinkPrimary}>
+                    Local dashboard
+                  </Link>
+
+                  <Link href="/authority/complaints" className={styles.sidebarLink}>
+                    Assigned complaints
+                  </Link>
+                </>
+              ) : (
+                <Link href="/authority/request-access" className={styles.sidebarLink}>
+                  Request authority access
                 </Link>
-              ) : null}
+              )}
             </nav>
 
             <div className={styles.sidebarFooter}>

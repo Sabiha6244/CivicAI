@@ -66,7 +66,8 @@ export default function ReportForm({
   const router = useRouter();
 
 const [reporterName, setReporterName] = useState(defaultReporterName);
-const [division, setDivision] = useState("");  const [district, setDistrict] = useState("");
+const [division, setDivision] = useState("");  
+const [district, setDistrict] = useState("");
   const [upazila, setUpazila] = useState("");
   const [cityArea, setCityArea] = useState("");
   const [locationDetails, setLocationDetails] = useState("");
@@ -106,6 +107,19 @@ const [division, setDivision] = useState("");  const [district, setDistrict] = u
     if (!selectedDistrict) return [];
     return dhakaCityAreas.filter((item) => item.district_id === selectedDistrict.id);
   }, [district, isDhakaDistrict]);
+
+  const selectedDhakaCityArea = useMemo(() => {
+  if (!isDhakaDistrict || !cityArea) return null;
+
+  return (
+    availableDhakaCityAreas.find((item) => item.name === cityArea) ?? null
+  );
+}, [availableDhakaCityAreas, cityArea, isDhakaDistrict]);
+
+const selectedCityCorporation =
+  isDhakaDistrict && selectedDhakaCityArea
+    ? selectedDhakaCityArea.city_corporation
+    : null;
 
   const selectedAreaCenter = useMemo<AreaCenter>(() => {
     const selectedDistrict = districts.find((item) => item.name === district);
@@ -286,12 +300,13 @@ const [division, setDivision] = useState("");  const [district, setDistrict] = u
     const areaLabel = cityArea || upazila;
 
     const addressLabel = [
-      locationDetails.trim(),
-      areaLabel,
-      district,
-      division,
-      "Bangladesh",
-    ]
+  locationDetails.trim(),
+  areaLabel,
+  selectedCityCorporation,
+  district,
+  division,
+  "Bangladesh",
+]
       .filter(Boolean)
       .join(", ");
 
@@ -304,8 +319,9 @@ const [division, setDivision] = useState("");  const [district, setDistrict] = u
         district,
         upazila: upazila || null,
         city_area: cityArea || null,
-        post_code: null,
-        location_details: locationDetails.trim(),
+city_corporation: selectedCityCorporation,
+post_code: null,
+location_details: locationDetails.trim(),
         address_label: addressLabel,
         lat,
         lng,
