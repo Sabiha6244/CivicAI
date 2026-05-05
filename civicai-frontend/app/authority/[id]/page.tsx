@@ -680,7 +680,10 @@ export default async function AuthorityComplaintDetailPage({
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority-complaints" showAuthority={isAdmin} />
+      <MobileUserMenu
+        active="authority-complaints"
+        role={isAdmin ? "admin" : "authority"}
+      />      
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>

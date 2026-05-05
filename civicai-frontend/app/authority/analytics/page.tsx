@@ -590,7 +590,7 @@ export default async function AuthorityAnalyticsPage() {
   if (!profile?.is_verified) {
     redirect("/login?next=/authority/analytics&verify=1");
   }
-  
+
   if (profile.role !== "admin") {
     redirect("/");
   }
@@ -826,8 +826,7 @@ export default async function AuthorityAnalyticsPage() {
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority-analytics" showAuthority={true} />
-
+      <MobileUserMenu active="authority-analytics" role="admin" />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>

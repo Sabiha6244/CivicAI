@@ -920,13 +920,21 @@ export default async function HomePage() {
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="home" showAuthority={isAuthority} />
-
+      <MobileUserMenu
+        active="home"
+        role={
+          isCentralAuthority
+            ? "admin"
+            : isLocalAuthority
+              ? "authority"
+              : "citizen"
+        }
+      />
       <div className={styles.loggedShell}>
         <aside className={styles.sidebar}>
           <div className={styles.sidebarInner}>
             <div className={styles.sidebarBrand}>CivicAI</div>
-            
+
 
             <nav className={styles.sidebarNav}>
               <Link href="/" className={styles.sidebarLink}>

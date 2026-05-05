@@ -221,8 +221,7 @@ export default async function AuthorityAnalyticsHotspotsPage() {
 
     return (
         <main className={styles.page}>
-            <MobileUserMenu active="authority-hotspots" showAuthority={true} />
-
+            <MobileUserMenu active="authority-hotspots" role="admin" />
             <div className={styles.wrapper}>
                 <section className={styles.pageGrid}>
                     <aside className={styles.sidebar}>

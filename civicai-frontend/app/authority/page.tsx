@@ -997,8 +997,10 @@ export default async function AuthorityPage() {
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="authority" showAuthority={isAdmin} />
-      <div className={styles.wrapper}>
+      <MobileUserMenu
+        active="authority"
+        role={isAdmin ? "admin" : "authority"}
+      />      <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
             <div className={styles.sidebarCard}>

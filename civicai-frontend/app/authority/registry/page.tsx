@@ -511,8 +511,7 @@ export default async function AuthorityRegistryPage({
 
     return (
         <main className={styles.page}>
-            <MobileUserMenu active="authority" showAuthority={true} />
-
+            <MobileUserMenu active="authority-registry" role="admin" />
             <div className={styles.wrapper}>
                 <section className={styles.pageGrid}>
                     <aside className={styles.sidebar}>
