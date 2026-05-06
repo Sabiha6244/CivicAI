@@ -155,16 +155,20 @@ async function disableOfficeAction(formData: FormData) {
 
     const reason =
         String(formData.get("reason") ?? "").trim() ||
-        "Disabled by central authority from the authority registry.";
+        "Disabled by central authority. This office should not receive complaint routing until reviewed again.";
 
-    const { error } = await supabase.rpc("disable_authority_office", {
+    const { error } = await supabase.rpc("disable_authority_service_desk", {
         p_office_id: officeId,
-        p_note: reason,
+        p_reason: reason,
     });
 
     if (error) {
-        console.error("Disable office error:", error.message);
-        redirect(`/authority/registry/${officeId}/disable?error=1`);
+        console.error("Disable office error:", {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code,
+        }); redirect(`/authority/registry/${officeId}/disable?error=1`);
     }
 
     redirect(`/authority/registry/${officeId}`);

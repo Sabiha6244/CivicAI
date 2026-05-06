@@ -317,8 +317,16 @@ export default async function AuthorityRequestAccessPage({
 
     return (
         <main className={styles.page}>
-            <MobileUserMenu active="authority" showAuthority={true} />
-
+            <MobileUserMenu
+                active="request-access"
+                role={
+                    profile?.role === "admin"
+                        ? "admin"
+                        : profile?.role === "authority"
+                            ? "authority"
+                            : "citizen"
+                }
+            />
             <div className={styles.wrapper}>
                 <section className={styles.pageGrid}>
                     <aside className={styles.sidebar}>
