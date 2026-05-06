@@ -343,17 +343,60 @@ export default async function AuthorityRequestAccessPage({
                                     Back to homepage
                                 </Link>
 
-                                <Link href="/authority/request-access" className={styles.sidebarLinkActive}>
-                                    Request authority access
-                                </Link>
+                                {profile?.role === "admin" ? (
+                                    <>
+                                        <Link href="/authority" className={styles.sidebarLink}>
+                                            Authority dashboard
+                                        </Link>
 
-                                <Link href="/authority/complaints" className={styles.sidebarLink}>
-                                    Authority complaints
-                                </Link>
+                                        <Link href="/authority/complaints" className={styles.sidebarLink}>
+                                            Manage complaints
+                                        </Link>
 
-                                <Link href="/authority/registry" className={styles.sidebarLink}>
-                                    Authority registry
-                                </Link>
+                                        <Link href="/authority/registry" className={styles.sidebarLink}>
+                                            Authority registry
+                                        </Link>
+
+                                        <Link href="/authority/analytics" className={styles.sidebarLink}>
+                                            Open analytics
+                                        </Link>
+                                    </>
+                                ) : profile?.role === "authority" ? (
+                                    <>
+                                        <Link href="/authority" className={styles.sidebarLink}>
+                                            Local dashboard
+                                        </Link>
+
+                                        <Link href="/authority/complaints" className={styles.sidebarLink}>
+                                            Assigned complaints
+                                        </Link>
+
+                                        <Link href="/my-profile" className={styles.sidebarLink}>
+                                            My profile
+                                        </Link>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Link
+                                            href="/authority/request-access"
+                                            className={styles.sidebarLinkActive}
+                                        >
+                                            Request authority access
+                                        </Link>
+
+                                        <Link href="/my-reports" className={styles.sidebarLink}>
+                                            My reports
+                                        </Link>
+
+                                        <Link href="/report" className={styles.sidebarLink}>
+                                            Report complaint
+                                        </Link>
+
+                                        <Link href="/my-profile" className={styles.sidebarLink}>
+                                            My profile
+                                        </Link>
+                                    </>
+                                )}
                             </nav>
                         </div>
                     </aside>

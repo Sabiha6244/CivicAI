@@ -77,6 +77,13 @@ export default async function MyReportsPage() {
   const isAuthority =
     profile?.is_verified === true && profile?.role === "authority";
 
+  const mobileMenuRole =
+    profile?.role === "admin"
+      ? "admin"
+      : profile?.role === "authority"
+        ? "authority"
+        : "citizen";
+
   const { data: complaints, error } = await supabase
     .from("complaints")
     .select(
@@ -135,8 +142,7 @@ export default async function MyReportsPage() {
 
   return (
     <main className={styles.page}>
-      <MobileUserMenu active="my-reports" showAuthority={isAuthority} />
-
+      <MobileUserMenu active="my-profile" role={mobileMenuRole} />
       <div className={styles.loggedShell}>
         <aside className={styles.sidebar}>
           <div className={styles.sidebarInner}>

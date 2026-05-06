@@ -61,10 +61,11 @@ Your complaint "${title}" for ${areaText} has received a status update.
 Current status: ${readableStatus}
 Final category: ${finalCategory || "Not specified"}
 
-${resolutionNote
-      ? `Authority note: ${resolutionNote}`
-      : "Please check the platform for the latest authority update."
-    }
+${
+  resolutionNote
+    ? `Authority note: ${resolutionNote}`
+    : "Please check the platform for the latest authority update."
+}
 
 Regards,
 CivicAI Authority Team`;
@@ -86,8 +87,7 @@ async function sendReporterEmail({
 }): Promise<ReporterEmailResult> {
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
-  const senderName =
-    process.env.BREVO_SENDER_NAME || "CivicAI Authority Team";
+  const senderName = process.env.BREVO_SENDER_NAME || "CivicAI Authority Team";
 
   if (!senderEmail || !apiKey) {
     return {
@@ -148,7 +148,15 @@ async function recomputePriorityQueue() {
     process.env.BACKEND_URL ||
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
-    process.env.NEXT_PUBLIC_API_BASE_URL!;
+    process.env.NEXT_PUBLIC_API_BASE_URL;
+
+  if (!backendBase) {
+    return {
+      ok: false,
+      error: "Backend URL is not configured.",
+      data: null,
+    };
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -174,6 +182,7 @@ async function recomputePriorityQueue() {
     }
 
     let parsed: unknown = null;
+
     try {
       parsed = raw ? JSON.parse(raw) : null;
     } catch {
@@ -217,8 +226,8 @@ export async function PATCH(
           get(name: string) {
             return cookieStore.get(name)?.value;
           },
-          set() { },
-          remove() { },
+          set() {},
+          remove() {},
         },
       }
     );
@@ -238,7 +247,10 @@ export async function PATCH(
       .eq("id", user.id)
       .single();
 
-    if (profileError || !profile?.is_verified || profile.role !== "authority") {
+    const isAdmin = profile?.role === "admin";
+    const isLocalAuthority = profile?.role === "authority";
+
+    if (profileError || !profile?.is_verified || (!isAdmin && !isLocalAuthority)) {
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
@@ -246,9 +258,13 @@ export async function PATCH(
 
     const requestedStatus = normalizeText(body.status);
     const nextResolutionNote =
-      body.resolution_note === undefined ? undefined : normalizeText(body.resolution_note);
+      body.resolution_note === undefined
+        ? undefined
+        : normalizeText(body.resolution_note);
     const nextFinalCategory =
-      body.final_category === undefined ? undefined : normalizeText(body.final_category);
+      body.final_category === undefined
+        ? undefined
+        : normalizeText(body.final_category);
     const notifyReporter = Boolean(body.notify_reporter);
     const nextEmailSubject = normalizeText(body.email_subject);
     const nextEmailText = normalizeText(body.email_text);
@@ -263,26 +279,12 @@ export async function PATCH(
     const effectiveStatus =
       requestedStatus === "submitted" ? "processing" : requestedStatus;
 
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceRoleKey) {
-      return NextResponse.json(
-        { error: "SUPABASE_SERVICE_ROLE_KEY is missing from server environment." },
-        { status: 500 }
-      );
-    }
-
-    const admin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceRoleKey,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false,
-        },
-      }
-    );
-
-    const { data: complaintRow, error: complaintError } = await admin
+    /*
+      This uses RLS:
+      admin can access any complaint.
+      local authority can access only complaints assigned to their active verified office.
+    */
+    const { data: complaintRow, error: complaintError } = await supabase
       .from("complaints")
       .select(`
         id,
@@ -299,10 +301,20 @@ export async function PATCH(
         resolved_at
       `)
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
-    if (complaintError || !complaintRow) {
-      return NextResponse.json({ error: "Complaint not found." }, { status: 404 });
+    if (complaintError) {
+      return NextResponse.json(
+        { error: complaintError.message || "Failed to verify complaint access." },
+        { status: 500 }
+      );
+    }
+
+    if (!complaintRow) {
+      return NextResponse.json(
+        { error: "Complaint not found or not accessible." },
+        { status: 404 }
+      );
     }
 
     const updatePayload: Record<string, unknown> = {
@@ -315,6 +327,7 @@ export async function PATCH(
 
     if (nextFinalCategory !== undefined) {
       updatePayload.final_category = nextFinalCategory;
+
       if (nextFinalCategory) {
         updatePayload.category_source = "authority";
       }
@@ -327,7 +340,12 @@ export async function PATCH(
       updatePayload.resolved_at = null;
     }
 
-    const { data: updatedComplaint, error: updateError } = await admin
+    /*
+      This also uses RLS:
+      admin can update any complaint.
+      local authority can update only assigned active verified office complaints.
+    */
+    const { data: updatedComplaint, error: updateError } = await supabase
       .from("complaints")
       .update(updatePayload)
       .eq("id", id)
@@ -359,53 +377,72 @@ export async function PATCH(
         emailSkippedReason =
           "Complaint reporter account could not be resolved for email delivery.";
       } else {
-        const { data: reporterAuth, error: reporterError } =
-          await admin.auth.admin.getUserById(createdBy);
+        const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-        const reporterEmail = reporterAuth.user?.email ?? null;
-
-        if (reporterError || !reporterEmail) {
+        if (!serviceRoleKey) {
           emailSkippedReason =
-            "Reporter email could not be loaded from Supabase Auth.";
+            "Reporter email could not be loaded because SUPABASE_SERVICE_ROLE_KEY is missing from the server environment.";
         } else {
-          const areaText =
-            complaintRow.city_area ||
-            complaintRow.upazila ||
-            complaintRow.district ||
-            complaintRow.address_label ||
-            "the reported area";
+          const admin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            serviceRoleKey,
+            {
+              auth: {
+                autoRefreshToken: false,
+                persistSession: false,
+              },
+            }
+          );
 
-          const fallbackSubject =
-            `CivicAI status update: ${effectiveStatus} - ${complaintRow.title || "Complaint"}`;
+          const { data: reporterAuth, error: reporterError } =
+            await admin.auth.admin.getUserById(createdBy);
 
-          const fallbackText = buildEmailFallback({
-            title: complaintRow.title || "Complaint",
-            areaText,
-            status: effectiveStatus,
-            finalCategory:
-              nextFinalCategory ||
-              complaintRow.final_category ||
-              "Not specified",
-            resolutionNote:
-              nextResolutionNote === undefined
-                ? complaintRow.resolution_note
-                : nextResolutionNote,
-          });
+          const reporterEmail = reporterAuth.user?.email ?? null;
 
-          try {
-            const emailResult = await sendReporterEmail({
-              to: reporterEmail,
-              subject: nextEmailSubject || fallbackSubject,
-              text: nextEmailText || fallbackText,
+          if (reporterError || !reporterEmail) {
+            emailSkippedReason =
+              "Reporter email could not be loaded from Supabase Auth.";
+          } else {
+            const areaText =
+              complaintRow.city_area ||
+              complaintRow.upazila ||
+              complaintRow.district ||
+              complaintRow.address_label ||
+              "the reported area";
+
+            const fallbackSubject = `CivicAI status update: ${effectiveStatus} - ${
+              complaintRow.title || "Complaint"
+            }`;
+
+            const fallbackText = buildEmailFallback({
+              title: complaintRow.title || "Complaint",
+              areaText,
+              status: effectiveStatus,
+              finalCategory:
+                nextFinalCategory ||
+                complaintRow.final_category ||
+                "Not specified",
+              resolutionNote:
+                nextResolutionNote === undefined
+                  ? complaintRow.resolution_note
+                  : nextResolutionNote,
             });
 
-            emailSent = emailResult.sent;
-            emailSkippedReason = emailResult.skippedReason ?? null;
-          } catch (emailError) {
-            emailSkippedReason =
-              emailError instanceof Error
-                ? emailError.message
-                : "Failed to send reporter email.";
+            try {
+              const emailResult = await sendReporterEmail({
+                to: reporterEmail,
+                subject: nextEmailSubject || fallbackSubject,
+                text: nextEmailText || fallbackText,
+              });
+
+              emailSent = emailResult.sent;
+              emailSkippedReason = emailResult.skippedReason ?? null;
+            } catch (emailError) {
+              emailSkippedReason =
+                emailError instanceof Error
+                  ? emailError.message
+                  : "Failed to send reporter email.";
+            }
           }
         }
       }

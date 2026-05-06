@@ -98,10 +98,16 @@ export default async function MyProfilePage({
     const isAuthority =
         profile?.is_verified === true && profile?.role === "authority";
 
+    const mobileMenuRole =
+        profile?.role === "admin"
+            ? "admin"
+            : profile?.role === "authority"
+                ? "authority"
+                : "citizen";
+
     return (
         <main className={styles.page}>
-            <MobileUserMenu active="my-profile" showAuthority={isAuthority} />
-
+            <MobileUserMenu active="my-profile" role={mobileMenuRole} />
             <div className={styles.loggedShell}>
                 <aside className={styles.sidebar}>
                     <div className={styles.sidebarInner}>

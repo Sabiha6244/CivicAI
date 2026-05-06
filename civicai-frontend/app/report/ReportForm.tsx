@@ -52,22 +52,23 @@ function sanitizeFileName(name: string) {
   return name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "").toLowerCase();
 }
 
+type MobileMenuRole = "admin" | "authority" | "citizen";
+
 type ReportFormProps = {
   userId: string;
   defaultReporterName: string;
-  showAuthority?: boolean;
+  mobileMenuRole: MobileMenuRole;
 };
-
 export default function ReportForm({
   userId,
   defaultReporterName,
-  showAuthority = false,
+  mobileMenuRole,
 }: ReportFormProps) {
   const router = useRouter();
 
-const [reporterName, setReporterName] = useState(defaultReporterName);
-const [division, setDivision] = useState("");  
-const [district, setDistrict] = useState("");
+  const [reporterName, setReporterName] = useState(defaultReporterName);
+  const [division, setDivision] = useState("");
+  const [district, setDistrict] = useState("");
   const [upazila, setUpazila] = useState("");
   const [cityArea, setCityArea] = useState("");
   const [locationDetails, setLocationDetails] = useState("");
@@ -109,17 +110,17 @@ const [district, setDistrict] = useState("");
   }, [district, isDhakaDistrict]);
 
   const selectedDhakaCityArea = useMemo(() => {
-  if (!isDhakaDistrict || !cityArea) return null;
+    if (!isDhakaDistrict || !cityArea) return null;
 
-  return (
-    availableDhakaCityAreas.find((item) => item.name === cityArea) ?? null
-  );
-}, [availableDhakaCityAreas, cityArea, isDhakaDistrict]);
+    return (
+      availableDhakaCityAreas.find((item) => item.name === cityArea) ?? null
+    );
+  }, [availableDhakaCityAreas, cityArea, isDhakaDistrict]);
 
-const selectedCityCorporation =
-  isDhakaDistrict && selectedDhakaCityArea
-    ? selectedDhakaCityArea.city_corporation
-    : null;
+  const selectedCityCorporation =
+    isDhakaDistrict && selectedDhakaCityArea
+      ? selectedDhakaCityArea.city_corporation
+      : null;
 
   const selectedAreaCenter = useMemo<AreaCenter>(() => {
     const selectedDistrict = districts.find((item) => item.name === district);
@@ -177,7 +178,7 @@ const selectedCityCorporation =
   }, [division, district, upazila, cityArea, isDhakaDistrict]);
 
   function resetForm() {
-    setReporterName(defaultReporterName); 
+    setReporterName(defaultReporterName);
     setDivision("");
     setDistrict("");
     setUpazila("");
@@ -300,13 +301,13 @@ const selectedCityCorporation =
     const areaLabel = cityArea || upazila;
 
     const addressLabel = [
-  locationDetails.trim(),
-  areaLabel,
-  selectedCityCorporation,
-  district,
-  division,
-  "Bangladesh",
-]
+      locationDetails.trim(),
+      areaLabel,
+      selectedCityCorporation,
+      district,
+      division,
+      "Bangladesh",
+    ]
       .filter(Boolean)
       .join(", ");
 
@@ -319,9 +320,9 @@ const selectedCityCorporation =
         district,
         upazila: upazila || null,
         city_area: cityArea || null,
-city_corporation: selectedCityCorporation,
-post_code: null,
-location_details: locationDetails.trim(),
+        city_corporation: selectedCityCorporation,
+        post_code: null,
+        location_details: locationDetails.trim(),
         address_label: addressLabel,
         lat,
         lng,
@@ -365,8 +366,8 @@ location_details: locationDetails.trim(),
   }
 
   return (
-  <main className={styles.page}>
-    <MobileUserMenu active="report" showAuthority={showAuthority} />
+    <main className={styles.page}>
+      <MobileUserMenu active="report" role={mobileMenuRole} />
       <div className={styles.wrapper}>
         <section className={styles.pageGrid}>
           <aside className={styles.sidebar}>
@@ -396,9 +397,9 @@ location_details: locationDetails.trim(),
                   Report complaint
                 </Link>
               </nav>
-<div className={styles.sidebarLogoutArea}>
-  <LogoutButton className={styles.sidebarLogoutButton} />
-</div>
+              <div className={styles.sidebarLogoutArea}>
+                <LogoutButton className={styles.sidebarLogoutButton} />
+              </div>
 
             </div>
           </aside>

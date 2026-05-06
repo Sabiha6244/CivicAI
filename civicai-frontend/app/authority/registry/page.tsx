@@ -433,7 +433,7 @@ export default async function AuthorityRegistryPage({
     if (officesError || requestsError) {
         return (
             <main className={styles.page}>
-                <MobileUserMenu active="authority" showAuthority={true} />
+                <MobileUserMenu active="authority-registry" role="admin" />
                 <div className={styles.wrapper}>
                     <div className={styles.alertBox}>
                         Failed to load registry data:{" "}

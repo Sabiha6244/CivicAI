@@ -26,9 +26,10 @@ export async function POST(
 
     const {
       data: { user },
+      error: authError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
@@ -38,22 +39,63 @@ export async function POST(
       .eq("id", user.id)
       .single();
 
-    if (profileError || !profile) {
-      return NextResponse.json({ error: "Profile not found." }, { status: 403 });
+    const isAdmin = profile?.role === "admin";
+    const isLocalAuthority = profile?.role === "authority";
+
+    if (profileError || !profile?.is_verified || (!isAdmin && !isLocalAuthority)) {
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
-    if (!profile.is_verified || profile.role !== "authority") {
-      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+    /*
+      This access check uses Supabase RLS.
+
+      admin:
+        can access any complaint.
+
+      local authority:
+        can access only complaints assigned to their active, verified linked office.
+
+      citizen:
+        blocked above.
+    */
+    const { data: targetComplaint, error: targetComplaintError } = await supabase
+      .from("complaints")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (targetComplaintError) {
+      return NextResponse.json(
+        {
+          error:
+            targetComplaintError.message ||
+            "Failed to verify complaint access.",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!targetComplaint) {
+      return NextResponse.json(
+        { error: "Complaint not found or not accessible." },
+        { status: 404 }
+      );
     }
 
     const backendBase =
       process.env.BACKEND_URL ||
       process.env.NEXT_PUBLIC_BACKEND_URL ||
-      process.env.NEXT_PUBLIC_API_BASE_URL!;
+      process.env.NEXT_PUBLIC_API_BASE_URL;
+
+    if (!backendBase) {
+      return NextResponse.json(
+        { error: "Backend URL is not configured." },
+        { status: 500 }
+      );
+    }
 
     const controller = new AbortController();
     const timeoutMs = 120_000;
-
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -78,6 +120,7 @@ export async function POST(
       }
 
       let parsed: unknown = null;
+
       try {
         parsed = rawText ? JSON.parse(rawText) : null;
       } catch {

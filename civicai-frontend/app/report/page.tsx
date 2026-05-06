@@ -32,13 +32,17 @@ export default async function ReportPage() {
     redirect("/login?next=/report&verify=1");
   }
 
+  const mobileMenuRole =
+    userProfile?.role === "admin"
+      ? "admin"
+      : userProfile?.role === "authority"
+        ? "authority"
+        : "citizen";
   return (
     <ReportForm
       userId={user.id}
       defaultReporterName={userProfile.full_name ?? ""}
-      showAuthority={
-        userProfile.is_verified === true && userProfile.role === "authority"
-      }
+      mobileMenuRole={mobileMenuRole}
     />
   );
 }

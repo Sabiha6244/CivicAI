@@ -163,8 +163,7 @@ export default async function NewServiceDeskPage({
 
     return (
         <main className={styles.page}>
-            <MobileUserMenu active="authority" showAuthority={true} />
-
+            <MobileUserMenu active="authority-registry" role="admin" />
             <div className={styles.wrapper}>
                 <section className={styles.pageGrid}>
                     <aside className={styles.sidebar}>
@@ -247,7 +246,7 @@ export default async function NewServiceDeskPage({
                                         <div className={styles.infoBox}>
                                             <p className={styles.kvLabel}>Creation rule</p>
                                             <p className={styles.kvValue}>
-                                                Use this page only for main authority desks. 
+                                                Use this page only for main authority desks.
                                             </p>
                                         </div>
 
@@ -414,7 +413,7 @@ export default async function NewServiceDeskPage({
                                             </p>
                                         </div>
 
-                                        
+
                                     </div>
                                 </article>
                             </div>
