@@ -692,11 +692,7 @@ export default async function AuthorityComplaintDetailPage({
                 {isAdmin ? "Central authority workspace" : "Local authority workspace"}
               </p>
               <h2 className={styles.sidebarTitle}>Complaint review</h2>
-              <p className={styles.sidebarText}>
-                {isAdmin
-                  ? "Inspect the complaint, review AI outputs, and manage central complaint decisions."
-                  : "Review this assigned complaint, confirm evidence, and save local authority updates."}
-              </p>
+              
 
               <nav className={styles.sidebarNav}>
                 <Link href="/authority" className={styles.sidebarLink}>
